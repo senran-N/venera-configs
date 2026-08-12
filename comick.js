@@ -1,4 +1,14 @@
 class Comick extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
     name = "comick"
     key = "comick"
     version = "1.2.0"
@@ -383,7 +393,7 @@ class Comick extends ComicSource {
             //     : this.baseUrl;
             let url = 'https://comick.art/home'
 
-            let res = await Network.get(url);
+            let res = await Network.get(url, this.webHeaders);
             if (res.status !== 200) throw "Request Error: " + res.status;
 
             let document = new HtmlDocument(res.body);
@@ -704,7 +714,7 @@ class Comick extends ComicSource {
             let maxAttempts = 100;
 
             while (maxAttempts > 0) {
-                let res = await Network.get(url);
+                let res = await Network.get(url, this.webHeaders);
                 if (res.status !== 200) break;
 
                 let document = new HtmlDocument(res.body)

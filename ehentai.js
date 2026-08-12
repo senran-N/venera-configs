@@ -1,4 +1,14 @@
 class Ehentai extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
     // Note: The fields which are marked as [Optional] should be removed if not used
 
     // name of the source
@@ -52,7 +62,7 @@ class Ehentai extends ComicSource {
         if (lastEvent == newTime) {
             return;
         }
-        const res = await Network.get("https://e-hentai.org/news.php", {});
+        const res = await Network.get("https://e-hentai.org/news.php", this.webHeaders);
         if (res.status !== 200) {
             return;
         }
@@ -228,7 +238,7 @@ class Ehentai extends ComicSource {
         let t = isLeaderBoard ? 1 : 0;
         let res
         try {
-            res = await Network.get(url, {});
+            res = await Network.get(url, this.webHeaders);
         }
         catch (e) {
             if(e.toString().toLowerCase().includes("redirect")) {
@@ -624,7 +634,7 @@ class Ehentai extends ComicSource {
             try {
                 this.checkEHEvent();
             } catch (_) {}
-            let res = await Network.get(`${this.baseUrl}/favorites.php`, {});
+            let res = await Network.get(`${this.baseUrl}/favorites.php`, this.webHeaders);
             if (res.status !== 200) {
                 throw `Invalid status code: ${res.status}`
             }
@@ -1166,7 +1176,7 @@ class Ehentai extends ComicSource {
                 let urlParseResult = this.parseUrl(cid)
                 let gid = urlParseResult.id
                 let token = urlParseResult.token
-                let res = await Network.get(`${this.baseUrl}/archiver.php?gid=${gid}&token=${token}`, {})
+                let res = await Network.get(`${this.baseUrl}/archiver.php?gid=${gid}&token=${token}`, this.webHeaders)
                 if(res.status !== 200) {
                     throw `Invalid status code: ${res.status}`
                 }

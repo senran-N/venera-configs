@@ -1,4 +1,14 @@
 class Nhentai extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
     // Note: The fields which are marked as [Optional] should be removed if not used
 
     // name of the source
@@ -692,7 +702,7 @@ class Nhentai extends ComicSource {
     // API 找不到时保留网页备用
             let url =
             `${this.baseUrl}/${param}/${encodeURIComponent(category)}?page=${page}`;
-            let res = await Network.get(url,{});
+            let res = await Network.get(url, this.webHeaders);
             return this.parseComicList(
                 res.body,
                 "category"
@@ -879,7 +889,7 @@ class Nhentai extends ComicSource {
                 return comic
             }
 
-            let res = await Network.get(`${this.baseUrl}/g/${id}/`, {})
+            let res = await Network.get(`${this.baseUrl}/g/${id}/`, this.webHeaders)
             if(res.status !== 200) {
                 throw "Invalid Status Code: " + res.status
             }

@@ -1,4 +1,14 @@
 class MXS extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
     // 漫画源基本信息
     name = "漫小肆";
     key = "mxs";
@@ -50,7 +60,7 @@ class MXS extends ComicSource {
                 }, 10000);
                 
                 // 测试网络连接
-                Network.get(currentDomain).then(res => {
+                Network.get(currentDomain, this.webHeaders).then(res => {
                     if (isCompleted) return;
                     const delay = Date.now() - startTime;
                     UI.cancelLoading(loadingId);

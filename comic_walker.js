@@ -1,4 +1,14 @@
 class ComicWalker extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
   name = "カドコミ";
   key = "comic_walker";
   version = "1.0.0";
@@ -78,7 +88,7 @@ class ComicWalker extends ComicSource {
   async init() {
     const itunes_api = "https://itunes.apple.com/lookup?bundleId=jp.co.bookwalker.cwapp.ios&country=jp";
 
-    const resp = await Network.get(itunes_api);
+    const resp = await Network.get(itunes_api, this.webHeaders);
 
     if (resp.status == 200) {
       response = JSON.parse(resp.body);

@@ -1,4 +1,14 @@
 class Baozi extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
   // 此漫画源的名称
   name = "包子漫画";
 
@@ -158,7 +168,7 @@ class Baozi extends ComicSource {
       type: "singlePageWithMultiPart",
 
       load: async () => {
-        var res = await Network.get(this.baseUrl);
+        var res = await Network.get(this.baseUrl, this.webHeaders);
         if (res.status !== 200) {
           throw "Invalid status code: " + res.status;
         }
@@ -266,9 +276,7 @@ class Baozi extends ComicSource {
   /// 分类漫画页面, 即点击分类标签后进入的页面
   categoryComics = {
     load: async (category, param, options, page) => {
-      let res = await Network.get(
-        `${this.baseUrl}/api/bzmhq/amp_comic_list?type=${param}&region=${options[0]}&state=${options[1]}&filter=%2a&page=${page}&limit=36&language=${this.lang}&__amp_source_origin=${this.baseUrl}`
-      );
+      let res = await Network.get(`${this.baseUrl}/api/bzmhq/amp_comic_list?type=${param}&region=${options[0]}&state=${options[1]}&filter=%2a&page=${page}&limit=36&language=${this.lang}&__amp_source_origin=${this.baseUrl}`, this.webHeaders);
       if (res.status !== 200) {
         throw "Invalid status code: " + res.status;
       }
@@ -296,7 +304,7 @@ class Baozi extends ComicSource {
   /// 搜索
   search = {
     load: async (keyword, options, page) => {
-      let res = await Network.get(`${this.baseUrl}/search?q=${keyword}`);
+      let res = await Network.get(`${this.baseUrl}/search?q=${keyword}`, this.webHeaders);
       if (res.status !== 200) {
         throw "Invalid status code: " + res.status;
       }
@@ -343,7 +351,7 @@ class Baozi extends ComicSource {
     loadFolders: null,
     /// 加载漫画
     loadComics: async (page, folder) => {
-      let res = await Network.get(`${this.baseUrl}/user/my_bookshelf`);
+      let res = await Network.get(`${this.baseUrl}/user/my_bookshelf`, this.webHeaders);
       if (res.status !== 200) {
         throw "Invalid status code: " + res.status;
       }
@@ -382,7 +390,7 @@ class Baozi extends ComicSource {
   comic = {
     // 加载漫画信息
     loadInfo: async (id) => {
-      let res = await Network.get(`${this.baseUrl}/comic/${id}`);
+      let res = await Network.get(`${this.baseUrl}/comic/${id}`, this.webHeaders);
       if (res.status !== 200) {
         throw "Invalid status code: " + res.status;
       }
@@ -490,7 +498,7 @@ class Baozi extends ComicSource {
       // App版链接
       let currentPageUrl = `https://appcn.baozimh.com/baozimhapp/comic/chapter/${comicId}/0_${epId}.html`;
 
-      const res = await Network.get(currentPageUrl);
+      const res = await Network.get(currentPageUrl, this.webHeaders);
       if (res.status !== 200) {
         throw `Invalid status code: ${res.status}`;
       }

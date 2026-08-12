@@ -1,4 +1,14 @@
 class Happy extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
     // 漫画源基本信息
     name = "嗨皮漫画"
     key = "happy"
@@ -252,7 +262,7 @@ class Happy extends ComicSource {
         if (replyTo) {
             // 加载楼中楼评论列表
             const api = `${this.baseUrl}/v2.0/apis/comment/subComments?root_id=${replyTo}&pn=${page}&ps=10`
-            const res = await Network.get(api)
+            const res = await Network.get(api, this.webHeaders)
 
             if (res.status !== 200) {
                 throw `评论接口请求失败: ${res.status}`
@@ -268,7 +278,7 @@ class Happy extends ComicSource {
             const order = this.loadSetting("commentOrder")
             const ch_id = epId ? `&ch_id=${epId}` : ""
             const api = `${this.baseUrl}/v2.0/apis/comment?code=${comicId}${ch_id}&pn=${page}&order=${order}&from=${from}`
-            const res = await Network.get(api)
+            const res = await Network.get(api, this.webHeaders)
 
             if (res.status !== 200) {
                 throw `评论接口请求失败: ${res.status}`
@@ -287,7 +297,7 @@ class Happy extends ComicSource {
         // 获取单页章节数据
         const fetchData = async (page) => {
             const api = `${this.baseUrl}/v2.0/apis/manga/chapterByPage?code=${comicId}&page=${page}&lang=cn&order=asc`
-            const res = await Network.get(api)
+            const res = await Network.get(api, this.webHeaders)
 
             if (res.status !== 200) {
                 throw `第${page}页章节接口请求失败: ${res.status}`
@@ -390,7 +400,7 @@ class Happy extends ComicSource {
         title: "嗨皮漫画",
         type: "singlePageWithMultiPart",
         load: async () => {
-            const res = await Network.get(this.baseUrl)
+            const res = await Network.get(this.baseUrl, this.webHeaders)
 
             if (res.status !== 200) {
                 throw `主页请求失败: ${res.status}`
@@ -497,7 +507,7 @@ class Happy extends ComicSource {
             // 加载排行榜漫画
             load: async (option, page) => {
                 const url = `${this.baseUrl}/rank/${option}`
-                const res = await Network.get(url)
+                const res = await Network.get(url, this.webHeaders)
 
                 if (res.status !== 200) {
                     throw `排行榜页面请求失败: ${res.status}`
@@ -542,7 +552,7 @@ class Happy extends ComicSource {
         // 加载漫画详细信息
         loadInfo: async (id) => {
             const url = `${this.baseUrl}/manga/${id}`
-            const res = await Network.get(url)
+            const res = await Network.get(url, this.webHeaders)
 
             if (res.status !== 200) {
                 throw `漫画详情页请求失败: ${res.status}`

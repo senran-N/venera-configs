@@ -1,5 +1,15 @@
 /** @type {import('./_venera_.js')} */
 class MH18 extends ComicSource {
+  // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
+  get webHeaders() {
+    return {
+      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "Referer": this.baseUrl + "/",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+      "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    };
+  }
+
   // Note: The fields which are marked as [Optional] should be removed if not used
 
   // name of the source
@@ -212,7 +222,7 @@ class MH18 extends ComicSource {
   /// search related
   search = {
     load: async (keyword, options, page) => {
-      const res = await Network.get(`${this.baseUrl}/s/${keyword}?page=${page}`);
+      const res = await Network.get(`${this.baseUrl}/s/${keyword}?page=${page}`, this.webHeaders);
       if (res.status !== 200) {
         throw `Invalid status code: ${res.status}`;
       }
@@ -243,7 +253,7 @@ class MH18 extends ComicSource {
       if (!id.startsWith("http")) {
         id = this.baseUrl + id;
       }
-      const res = await Network.get(id);
+      const res = await Network.get(id, this.webHeaders);
       if (res.status !== 200) {
         throw `Invalid status code: ${res.status}`;
       }
