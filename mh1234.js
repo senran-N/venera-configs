@@ -15,7 +15,7 @@ class MH1234 extends ComicSource {
     // unique id of the source
     key = "mh1234"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.4.0"
 

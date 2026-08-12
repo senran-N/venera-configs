@@ -21,7 +21,7 @@
         "name": "包子漫画",
         "fileName": "baozi.js",
         "key": "baozi",
-        "version": "1.1.6"
+        "version": "1.1.7"
     },
     {
         "name": "Picacg",
@@ -33,20 +33,20 @@
         "name": "nhentai",
         "fileName": "nhentai.js",
         "key": "nhentai",
-        "version": "1.1.0"
+        "version": "1.1.1"
     },
     {
         "name": "紳士漫畫",
         "fileName": "wnacg.js",
         "key": "wnacg",
-        "version": "1.0.5",
+        "version": "1.0.6",
         "description": "紳士漫畫漫畫源, 不能使用時請嘗試更換URL"
     },
     {
         "name": "ehentai",
         "fileName": "ehentai.js",
         "key": "ehentai",
-        "version": "1.1.8"
+        "version": "1.2.1"
     },
     {
         "name": "禁漫天堂",
@@ -78,19 +78,19 @@
         "name": "hitomi.la",
         "fileName": "hitomi.js",
         "key": "hitomi",
-        "version": "1.1.2"
+        "version": "1.2.0"
     },
     {
         "name": "comick",
         "fileName": "comick.js",
         "key": "comick",
-        "version": "1.2.0"
+        "version": "1.2.1"
     },
     {
         "name": "优酷漫画",
         "fileName": "ykmh.js",
         "key": "ykmh",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     {
         "name": "再漫画",
@@ -126,13 +126,13 @@
         "name": "カドコミ",
         "fileName": "comic_walker.js",
         "key": "comic_walker",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     {
         "name": "漫画1234",
         "fileName": "mh1234.js",
         "key": "mh1234",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     {
         "name": "CCC追漫台",
@@ -150,13 +150,13 @@
         "name": "18漫画",
         "fileName": "mh18.js",
         "key": "mh18",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     {
         "name": "漫小肆",
         "fileName": "mxs.js",
         "key": "mxs",
-        "version": "1.0.0"
+        "version": "1.0.1"
     },
     {
         "name": "漫画人",
@@ -181,7 +181,7 @@
         "fileName": "hot_manga.js",
         "key": "hot_manga",
         "version": "1.0.0"
-	},
+    },
     {
         "name": "Kavita",
         "fileName": "kavita.js",
@@ -192,7 +192,7 @@
         "name": "嗨皮漫画",
         "fileName": "happy.js",
         "key": "happy",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "description": "中国大陆及日韩IP无法访问，遇到403可以尝试切换其他地区网络"
     },
     {
