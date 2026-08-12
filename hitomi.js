@@ -33,6 +33,21 @@ const refererUrl = "https://hitomi.la/";
 let galleries_index_version = "";
 let gg = undefined;
 
+// ---- 性能优化: 缓存层 ----
+// 索引文件按版本不可变, 会话内节点/数据可安全缓存; 版本变化时统一失效
+const nodeCache = new Map(); // B-tree 节点缓存: "field:address" -> node
+const dataCache = new Map(); // .data 片段缓存: "offset:length" -> galleryids (LRU)
+let dataCacheBytes = 0;
+const DATA_CACHE_LIMIT = 16 * 1024 * 1024; // .data 缓存总量上限 16MB
+let versionCacheTime = 0; // 版本号缓存时间戳
+const VERSION_CACHE_TTL = 5 * 60 * 1000; // 5 分钟内不重复请求版本号
+
+function clearIndexCaches() {
+  nodeCache.clear();
+  dataCache.clear();
+  dataCacheBytes = 0;
+}
+
 /**
  * 求交集
  * @param arrays
@@ -193,6 +208,9 @@ async function get_url_at_range(url, range) {
 async function get_node_at_address(field, address) {
   if (!galleries_index_version)
     throw new Error("galleries_index_version is not set");
+  const cacheKey = field + ":" + address;
+  const cached = nodeCache.get(cacheKey);
+  if (cached) return cached;
   const url =
     "https://" +
     domain +
@@ -204,10 +222,24 @@ async function get_node_at_address(field, address) {
     address,
     address + max_node_size - 1,
   ]);
-  return decode_node(data);
+  const node = decode_node(data);
+  if (node) nodeCache.set(cacheKey, node);
+  return node;
 }
 
 async function get_galleryids_from_data(data) {
+  let [offset, length] = data;
+  if (length > 100000000 || length <= 0) {
+    throw new Error("length " + length + " is too long");
+  }
+  const cacheKey = offset + ":" + length;
+  const cached = dataCache.get(cacheKey);
+  if (cached) {
+    // LRU touch: 移到末尾表示最近使用
+    dataCache.delete(cacheKey);
+    dataCache.set(cacheKey, cached);
+    return cached;
+  }
   let url =
     "https://" +
     domain +
@@ -216,10 +248,6 @@ async function get_galleryids_from_data(data) {
     "/galleries." +
     galleries_index_version +
     ".data";
-  let [offset, length] = data;
-  if (length > 100000000 || length <= 0) {
-    throw new Error("length " + length + " is too long");
-  }
   const inbuf = await get_url_at_range(url, [offset, offset + length - 1]);
   let galleryids = [];
 
@@ -246,6 +274,17 @@ async function get_galleryids_from_data(data) {
   for (let i = 0; i < number_of_galleryids; ++i) {
     galleryids.push(view.getInt32(pos, false /* big-endian */));
     pos += 4;
+  }
+
+  // 写入缓存 (LRU, 只缓存 <4MB 的片段, 总量受限)
+  if (length < 4 * 1024 * 1024) {
+    dataCache.set(cacheKey, galleryids);
+    dataCacheBytes += length;
+    while (dataCacheBytes > DATA_CACHE_LIMIT && dataCache.size > 1) {
+      const oldestKey = dataCache.keys().next().value;
+      dataCacheBytes -= parseInt(oldestKey.split(":")[1], 10);
+      dataCache.delete(oldestKey);
+    }
   }
 
   return galleryids;
@@ -318,7 +357,18 @@ async function get_galleryids_for_query_without_namespace(query) {
 
   const data = await B_search(field, key, node);
   if (!data) {
-    return [];
+    // 未命中: 可能是索引已更新而版本号缓存过期, 强制刷新版本后重试一次
+    const oldVersion = galleries_index_version;
+    await update_galleries_index_version(true);
+    if (galleries_index_version === oldVersion) {
+      return []; // 版本没变, 该词确实不在索引中
+    }
+    const node2 = await get_node_at_address(field, 0);
+    const data2 = await B_search(field, key, node2);
+    if (!data2) {
+      return [];
+    }
+    return await get_galleryids_from_data(data2);
   } else {
     return await get_galleryids_from_data(data);
   }
@@ -454,23 +504,37 @@ async function get_index_version(name = "galleriesindex") {
   }
 }
 
-async function update_galleries_index_version() {
-  galleries_index_version = await get_index_version();
+async function update_galleries_index_version(force = false) {
+  const now = Date.now();
+  if (!force && versionCacheTime && now - versionCacheTime < VERSION_CACHE_TTL) {
+    return; // 版本号缓存有效, 跳过网络请求
+  }
+  const newVersion = await get_index_version();
+  if (newVersion !== galleries_index_version) {
+    galleries_index_version = newVersion;
+    clearIndexCaches(); // 索引版本变化, 缓存全部失效
+  }
+  versionCacheTime = now;
 }
 
 async function get_image_srcs(files) {
-  const resp = await Network.get(
-    "https://" + domain + "/" + "gg.js?_=" + new Date().getTime(),
-    {
-      referer: refererUrl,
+  if (!gg) {
+    const resp = await Network.get(
+      "https://" + domain + "/gg.js",
+      {
+        referer: refererUrl,
+      }
+    );
+    if (resp.status >= 400) {
+      throw new Error(resp.status);
     }
-  );
-  if (resp.status >= 400) {
-    throw new Error(resp.status);
+    gg = undefined; // eval 失败时保证下次可重试
+    eval(resp.body);
+    if (!gg || !gg.b) {
+      gg = undefined;
+      throw new Error();
+    }
   }
-
-  eval(resp.body);
-  if (!gg.b) throw new Error();
 
   const subdomain_from_url = (url, base, dir) => {
     var retval = "";
@@ -995,7 +1059,7 @@ class Hitomi extends ComicSource {
   // unique id of the source
   key = "hitomi";
 
-  version = "1.1.2";
+  version = "1.2.0";
 
   minAppVersion = "1.4.6";
 
