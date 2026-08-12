@@ -11,7 +11,7 @@ class ComicWalker extends ComicSource {
 
   name = "カドコミ";
   key = "comic_walker";
-  version = "1.0.1";
+  version = "1.0.2";
   minAppVersion = "1.6.0";
   url =
     "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/comic_walker.js";
@@ -193,20 +193,32 @@ class ComicWalker extends ComicSource {
 
   comic = {
     loadInfo: async (id) => {
-      const res = await this.request(
-        `${this.api_base}/v2/screens/comics/${id}`,
-        this.headers,
-      );
+      // 并发: 详情 + 章节第 1 页 (id 已知, 互不依赖, 原串行浪费一个 RTT)
+      const [res, firstEp] = await Promise.all([
+        this.request(
+          `${this.api_base}/v2/screens/comics/${id}`,
+          this.headers,
+        ),
+        this.request(
+          `${this.api_base}/v1/comics/${id}/episodes?offset=0&limit=100&sort=asc`,
+          this.headers,
+        ),
+      ]);
       const detail = res.resources.detail;
 
       const totalCount = res.resources.episode_total_count || 0;
-      let episodes = { resources: [] };
-      for (let offset = 0; offset < totalCount; offset += 100) {
-        const chunk = await this.request(
-          `${this.api_base}/v1/comics/${id}/episodes?offset=${offset}&limit=100&sort=asc`,
-          this.headers,
-        );
-        episodes.resources.push(...(chunk.resources || []));
+      let episodes = { resources: [...(firstEp.resources || [])] };
+      // 剩余章节页分批并发 (每批 4 页, 保持 offset 升序)
+      for (let offset = 100; offset < totalCount; offset += 400) {
+        const offsets = [];
+        for (let o = offset; o < totalCount && o < offset + 400; o += 100) offsets.push(o);
+        const chunks = await Promise.all(offsets.map((o) =>
+          this.request(
+            `${this.api_base}/v1/comics/${id}/episodes?offset=${o}&limit=100&sort=asc`,
+            this.headers,
+          )
+        ));
+        for (const chunk of chunks) episodes.resources.push(...(chunk.resources || []));
       }
 
       const tags = new Map();
@@ -273,7 +285,6 @@ class ComicWalker extends ComicSource {
       ) {
         throw new Error("No available rental plans after filtering");
       }
-      console.log(plans);
       const freePlan = plans.find((plan) => plan.type === "free");
       if (!freePlan) {
         const plan = plans[randomInt(0, plans.length - 1)];

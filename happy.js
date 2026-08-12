@@ -12,7 +12,7 @@ class Happy extends ComicSource {
     // 漫画源基本信息
     name = "嗨皮漫画"
     key = "happy"
-    version = "1.0.1"
+    version = "1.0.2"
     minAppVersion = "1.6.0"
     url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/happy.js"
 
@@ -445,6 +445,7 @@ class Happy extends ComicSource {
         load: async (category, param, options, page) => {
             const api = `${this.baseUrl}/apis/c/index?genre=${param}&area=${options[0]}&audience=${options[1]}&series_status=${options[2]}&pn=${page}`
             const res = await Network.get(api, {
+                ...this.webHeaders,
                 "Referer": `${this.baseUrl}/latest`
             })
 
@@ -531,6 +532,7 @@ class Happy extends ComicSource {
         load: async (keyword, options, page) => {
             const api = `${this.baseUrl}/v2.0/apis/manga/ssearch`
             const res = await Network.post(api, {
+                ...this.webHeaders,
                 "Referer": `${this.baseUrl}/sssearch`,
                 "Content-Type": "application/x-www-form-urlencoded"
             }, `searchkey=${encodeURIComponent(keyword)}&v=v2.13`)
@@ -609,6 +611,7 @@ class Happy extends ComicSource {
         loadEp: async (comicId, epId) => {
             const api = `${this.baseUrl}/v2.0/apis/manga/reading?code=${comicId}&cid=${epId}&v=v3.1919111`
             const res = await Network.get(api, {
+                ...this.webHeaders,
                 "Referer": this.baseUrl,
                 "X-Requested-With": "XMLHttpRequest"
             })

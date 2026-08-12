@@ -8,7 +8,7 @@ class MangaDex extends ComicSource {
     // unique id of the source
     key = "manga_dex"
 
-    version = "1.1.1"
+    version = "1.1.2"
 
     minAppVersion = "1.6.0"
 
@@ -518,31 +518,37 @@ class MangaDex extends ComicSource {
 
         },
         getChapters: async (id) => {
-            let res = await fetch(`https://api.mangadex.org/manga/${id}/feed?limit=500&translatedLanguage[]=en&order[chapter]=asc`)
-            if (!res.ok) {
-                throw new Error("Network response was not ok")
-            }
-            let data = await res.json()
+            // 分页拉取全部章节 (原单请求 limit=500, 超 500 章的作品会丢章节)
             let chapters = new Map()
-            for (let chapter of data['data']) {
-                let id = chapter['id']
-                let chapterId = chapter['attributes']['chapter'] ?? "Oneshot"
-                let title = chapter['attributes']['title']
-                if (title) {
-                    title = `${chapterId}: ${title}`
-                } else {
-                    title = chapterId
+            let offset = 0
+            while (true) {
+                let res = await fetch(`https://api.mangadex.org/manga/${id}/feed?limit=500&offset=${offset}&translatedLanguage[]=en&order[chapter]=asc`)
+                if (!res.ok) {
+                    throw new Error("Network response was not ok")
                 }
-                let volume = chapter['attributes']['volume']
-                if (volume) {
-                    volume = `Volume ${volume}`
-                } else {
-                    volume = "No Volume"
+                let data = await res.json()
+                for (let chapter of data['data']) {
+                    let id = chapter['id']
+                    let chapterId = chapter['attributes']['chapter'] ?? "Oneshot"
+                    let title = chapter['attributes']['title']
+                    if (title) {
+                        title = `${chapterId}: ${title}`
+                    } else {
+                        title = chapterId
+                    }
+                    let volume = chapter['attributes']['volume']
+                    if (volume) {
+                        volume = `Volume ${volume}`
+                    } else {
+                        volume = "No Volume"
+                    }
+                    if (chapters.get(volume) === undefined) {
+                        chapters.set(volume, new Map())
+                    }
+                    chapters.get(volume).set(id, title)
                 }
-                if (chapters.get(volume) === undefined) {
-                    chapters.set(volume, new Map())
-                }
-                chapters.get(volume).set(id, title)
+                offset += 500
+                if (offset >= (data['total'] || 0)) break
             }
             return chapters
         },

@@ -11,7 +11,7 @@ class Comick extends ComicSource {
 
     name = "comick"
     key = "comick"
-    version = "1.2.1"
+    version = "1.2.2"
     minAppVersion = "1.4.0"
     // update url
     url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/comick.js"
@@ -454,10 +454,10 @@ class Comick extends ComicSource {
 
             let mangaList = JSON.parse(res.body).data;
             if (!Array.isArray(mangaList)) throw "Invalid data format";
-            let maxpage = mangaList.total/mangaList.per_page
+            // API 不返回总数, null 让 App 翻到空页自动停止 (原代码 NaN 导致分页失效)
             return {
                 comics: mangaList.map(this.getFormattedManga),
-                maxPage: maxpage
+                maxPage: null
             };
         },
         optionList: [
@@ -480,10 +480,10 @@ class Comick extends ComicSource {
             let jsonData = JSON.parse(document.getElementById('sv-data').text);
             let mangaList = jsonData.data;
             if (!Array.isArray(mangaList)) throw "Invalid data format";
-            let maxpage = mangaList.total/mangaList.per_page
+            // API 不返回总数, null 让 App 翻到空页自动停止 (原代码 NaN 导致分页失效)
             return {
                 comics: mangaList.map(this.getFormattedManga),
-                maxPage: Math.ceil(maxpage)
+                maxPage: null
             };
         },
         optionList: []
@@ -503,18 +503,24 @@ class Comick extends ComicSource {
                 throw "ID error: ";
             }
 
-            let res = await Network.get(
-                `https://comick.art/comic/${cId}`, 
-                headers 
-            );
+            // 并发: 详情页 + 章节列表第 1 页 (slug 即 cId, 两者互不依赖, 原串行浪费一个 RTT)
+            let [res, firstPageRes] = await Promise.all([
+                Network.get(
+                    `https://comick.art/comic/${cId}`,
+                    Comick.getRandomHeaders()
+                ),
+                Network.get(
+                    `https://comick.art/api/comics/${cId}/chapter-list?page=1`,
+                    Comick.getRandomHeaders()
+                ),
+            ]);
             if (res.status !== 200) {
                 throw "Invalid status code: " + res.status
             }
 
-            let load_chapter = async (slug, comicData) => {
+            let load_chapter = async (slug, comicData, firstPageRes) => {
                 let langBuckets = new Map();
                 let latestTimestamp = null;
-                let page = 1;
                 let lastPage = 1;
 
                 let collectChapters = (items) => {
@@ -527,36 +533,43 @@ class Comick extends ComicSource {
                     });
                 };
 
-                console.log(`开始加载章节列表，漫画slug: ${slug}`);
-                while (page <= lastPage) {
-                    let url = `https://comick.art/api/comics/${slug}/chapter-list?page=${page}`;
-                    let resCh = await Network.get(url=url, headers=Comick.getRandomHeaders());
-                    console.log(`请求章节列表页面 ${page}，URL: ${resCh}`);
+                let parsePage = (resCh, isFirst) => {
                     if (resCh.status !== 200) {
                         throw `Invalid status code: ${resCh.status}`;
                     }
-
                     let payload;
                     try {
                         payload = JSON.parse(resCh.body);
                     } catch (err) {
                         throw "Invalid chapter list response";
                     }
-
                     let data = Array.isArray(payload?.data) ? payload.data : [];
-                    if (page === 1 && data.length > 0) {
+                    if (isFirst && data.length > 0) {
                         latestTimestamp = data[0].updated_at || data[0].publish_at || data[0].created_at || null;
                     }
                     collectChapters(data);
-
                     let pagination = payload?.pagination;
                     if (pagination && pagination.last_page != null) {
                         let parsed = parseInt(pagination.last_page, 10);
                         if (!Number.isNaN(parsed) && parsed > 0) {
-                            lastPage = parsed;
+                            lastPage = Math.max(lastPage, parsed);
                         }
                     }
-                    page += 1;
+                };
+
+                parsePage(firstPageRes, true);
+                // 剩余页分批并发 (每批 4 页, 保持顺序且控制请求速率)
+                let pages = [];
+                for (let p = 2; p <= lastPage; p++) pages.push(p);
+                for (let i = 0; i < pages.length; i += 4) {
+                    let batch = pages.slice(i, i + 4);
+                    let results = await Promise.all(batch.map(p =>
+                        Network.get(
+                            `https://comick.art/api/comics/${slug}/chapter-list?page=${p}`,
+                            Comick.getRandomHeaders()
+                        )
+                    ));
+                    for (let resCh of results) parsePage(resCh, false);
                 }
 
                 let result = new Map();
@@ -649,7 +662,7 @@ class Comick extends ComicSource {
             let updateTime = fallbackUpdate;
 
             try {
-                let temp = await load_chapter(cId, comicData);
+                let temp = await load_chapter(cId, comicData, firstPageRes);
                 if (Array.isArray(temp)) {
                     chapters = temp[0] instanceof Map ? temp[0] : chapters;
                     updateTime = typeof temp[1] === 'string' && temp[1].length > 0 ? temp[1] : updateTime;

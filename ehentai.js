@@ -17,7 +17,7 @@ class Ehentai extends ComicSource {
     // unique id of the source
     key = "ehentai"
 
-    version = "1.2.1"
+    version = "1.2.2"
 
     minAppVersion = "1.5.3"
 
@@ -687,6 +687,7 @@ class Ehentai extends ComicSource {
                 this.checkEHEvent();
             } catch (_) {}
             let res = await Network.get(id, {
+                ...this.webHeaders,
                 'cookie': 'nw=1'
             });
             if (res.status !== 200) {
@@ -826,6 +827,7 @@ class Ehentai extends ComicSource {
                 url += `?p=${next}`
             }
             let res = await Network.get(url, {
+                ...this.webHeaders,
                 'cache-time': 'long',
                 'prevent-parallel': 'true',
                 'cookie': 'nw=1'
@@ -919,6 +921,7 @@ class Ehentai extends ComicSource {
 
         getKey: async (url) => {
             let res = await Network.get(url, {
+                ...this.webHeaders,
                 'cache-time': 'long',
                 'prevent-parallel': 'true',
             })

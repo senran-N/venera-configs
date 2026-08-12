@@ -6,7 +6,7 @@ class Komiic extends ComicSource {
     // 唯一标识符
     key = "Komiic"
 
-    version = "1.0.3"
+    version = "1.0.4"
 
     minAppVersion = "1.0.0"
 
@@ -402,7 +402,8 @@ class Komiic extends ComicSource {
 
             let results = await Promise.all([
                 this.queryComics({ "operationName": "comicByIds", "variables": { "comicIds": recommend }, "query": "query comicByIds($comicIds: [ID]!) {\n  comicByIds(comicIds: $comicIds) {\n    id\n    title\n    status\n    year\n    imageUrl\n    authors {\n      id\n      name\n      __typename\n    }\n    categories {\n      id\n      name\n      __typename\n    }\n    dateUpdated\n    monthViews\n    views\n    favoriteCount\n    lastBookUpdate\n    lastChapterUpdate\n    __typename\n  }\n}" }),
-                getChapter.call()
+                getChapter.call(),
+                getFavoriteStatus.call()
             ])
 
             let info = results[0].comics.pop()
@@ -421,6 +422,7 @@ class Komiic extends ComicSource {
                 chapters: results[1],
                 recommend: results[0].comics,
                 updateTime: info.updateTime,
+                isFavorite: results[2],
             }
         },
         // 获取章节图片

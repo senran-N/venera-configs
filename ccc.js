@@ -8,7 +8,7 @@ class CCC extends ComicSource {
     // unique id of the source
     key = "ccc"
 
-    version = "1.0.1"
+    version = "1.0.2"
 
     minAppVersion = "1.6.0"
 
@@ -526,7 +526,13 @@ class CCC extends ComicSource {
          * @returns {Promise<ComicDetails>}
          */
         loadInfo: async (id) => {
-            const res = await Network.get(`${this.apiUrl}/book/${id}/info`, await this.getApiHeaders());
+            const headers = await this.getApiHeaders();
+            // 并发获取 info/chapter/recommend (原串行浪费 2 个 RTT, 头只取一次避免并发刷新 token)
+            const [res, chapter_res, recommend_res] = await Promise.all([
+                Network.get(`${this.apiUrl}/book/${id}/info`, headers),
+                Network.get(`${this.apiUrl}/book/${id}/chapter`, headers),
+                Network.get(`${this.apiUrl}/book/${id}/recommend`, headers),
+            ]);
             const jsonData = JSON.parse(res.body)["data"];
             const authors = [];
             for (let a of jsonData["author"]) {
@@ -536,13 +542,11 @@ class CCC extends ComicSource {
             for (let t of jsonData["tags"]) {
                 tags.push(t["name"]);
             }
-            const chapter_res = await Network.get(`${this.apiUrl}/book/${id}/chapter`, await this.getApiHeaders());
             const chapterData = JSON.parse(chapter_res.body)["data"];
             const chapters = {};
             for (let c of chapterData["chapters"]) {
                 chapters[c["id"].toString()] = `${!this.comic.freeRead(c) ? "[付費]" : ""}${c["vol_name"]}-${c["name"]}`;
             }
-            const recommend_res = await Network.get(`${this.apiUrl}/book/${id}/recommend`, await this.getApiHeaders());
             const recommendData = JSON.parse(recommend_res.body)["data"];
             const recommends = [];
             for (let r of recommendData["hot"]) {

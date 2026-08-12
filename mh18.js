@@ -18,7 +18,7 @@ class MH18 extends ComicSource {
   // unique id of the source
   key = "mh18"
 
-  version = "1.0.1"
+  version = "1.0.2"
 
   minAppVersion = "1.4.0"
 
@@ -222,7 +222,7 @@ class MH18 extends ComicSource {
   /// search related
   search = {
     load: async (keyword, options, page) => {
-      const res = await Network.get(`${this.baseUrl}/s/${keyword}?page=${page}`, this.webHeaders);
+      const res = await Network.get(`${this.baseUrl}/s/${encodeURIComponent(keyword)}?page=${page}`, this.webHeaders);
       if (res.status !== 200) {
         throw `Invalid status code: ${res.status}`;
       }
@@ -258,29 +258,33 @@ class MH18 extends ComicSource {
         throw `Invalid status code: ${res.status}`;
       }
       const document = new HtmlDocument(res.body);
-      const title = document.querySelector(".text-xl").text.trim().split("   ")[0]
-      const cover = document.querySelector(".object-cover").attributes["src"];
-      const description = document.querySelector("p.text-medium").text;
+      const title = document.querySelector(".text-xl")?.text.trim().split("   ")[0] || ""
+      const cover = document.querySelector(".object-cover")?.attributes["src"] || "";
+      const description = document.querySelector("p.text-medium")?.text || "";
       const infos = document.querySelectorAll("div.py-1");
       const tags = { "作者": [], "类型": [], "标签": [] };
-      for (let author of infos[0].querySelectorAll("a > span")) {
+      for (let author of infos[0]?.querySelectorAll("a > span") || []) {
         let author_name = author.text.trim();
         if (author_name.endsWith(",")) {
           author_name = author_name.slice(0, -1).trim();
         }
         tags["作者"].push(author_name);
       }
-      for (let category of infos[1].querySelectorAll("a > span")) {
+      for (let category of infos[1]?.querySelectorAll("a > span") || []) {
         let category_name = category.text.trim();
         if (category_name.endsWith(",")) {
           category_name = category_name.slice(0, -1).trim();
         }
         tags["类型"].push(category_name);
       }
-      for (let tag of infos[2].querySelectorAll("a")) {
+      for (let tag of infos[2]?.querySelectorAll("a") || []) {
         tags["标签"].push(tag.text.replace("\n", "").replaceAll(" ", "").replace("#", ""));
       }
-      const mangaId = document.querySelector("#mangachapters").attributes["data-mid"];
+      const mangaEl = document.querySelector("#mangachapters");
+      const mangaId = mangaEl && mangaEl.attributes ? mangaEl.attributes["data-mid"] : null;
+      if (!mangaId) {
+        throw "无法获取漫画ID";
+      }
       const chapterRes = await Network.get(`${this.baseUrl}/manga/get?mid=${mangaId}&mode=all&t=${Date.now()}`, this.headers);
       const chapterDoc = new HtmlDocument(chapterRes.body);
       const chapters = {};

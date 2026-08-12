@@ -1,7 +1,7 @@
 class ShonenJumpPlus extends ComicSource {
   name = "少年ジャンプ＋";
   key = "shonen_jump_plus";
-  version = "1.1.1";
+  version = "1.1.2";
   minAppVersion = "1.2.1";
   url =
     "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/shonen_jump_plus.js";
@@ -163,8 +163,11 @@ class ShonenJumpPlus extends ComicSource {
   comic = {
     loadInfo: async (id) => {
       await this.ensureAuth();
-      const seriesData = await this.fetchSeriesDetail(id);
-      const episodes = await this.fetchEpisodes(id);
+      // 并发: 系列详情 + 章节列表 (两个 GraphQL 查询互不依赖, 原串行浪费一个 RTT)
+      const [seriesData, episodes] = await Promise.all([
+        this.fetchSeriesDetail(id),
+        this.fetchEpisodes(id),
+      ]);
 
       const { chapters, latestPublishAt } = episodes.reduce(
         (acc, ep) => ({

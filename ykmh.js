@@ -12,7 +12,7 @@ class YKMHSource extends ComicSource {
 
     name = "优酷漫画"
     key = "ykmh"
-    version = "1.0.1"
+    version = "1.0.2"
     minAppVersion = "1.4.0"
     url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/ykmh.js"
 
@@ -520,7 +520,6 @@ class YKMHSource extends ComicSource {
                                 author = authorMatch2[1].trim();
                             }
                         }
-                        console.log("解析到作者:", author);
                     } catch (e) {
                         console.warn("解析作者失败:", e);
                     }
@@ -529,7 +528,6 @@ class YKMHSource extends ComicSource {
                     try {
                         let txtItems = html.match(/<p class="txtItme">[\s\S]*?<\/p>/g);
                         if (txtItems) {
-                            console.log("找到txtItme元素数量:", txtItems.length);
                             for (let item of txtItems) {
                                 if (item.includes('icon icon02')) {
                                     let tagMatches = item.matchAll(/<a href="[^"]*\/list\/[^"]*\/">([^<]+)<\/a>/g);
@@ -542,7 +540,6 @@ class YKMHSource extends ComicSource {
                                                     if (tagText === '连载中' || tagText === '已完结' || tagText === '完结' || 
                                                         tagText === '连载' || tagText === '暂停' || tagText === '休刊') {
                                                         status = tagText;
-                                                        console.log("找到状态标签:", tagText);
                                                     }
                                                 }
                                             }
@@ -552,7 +549,6 @@ class YKMHSource extends ComicSource {
                             }
                         }
                         
-                        console.log("解析到状态:", status, "标签:", tags);
                     } catch (e) {
                         console.warn("解析标签失败:", e);
                         tags = [];
@@ -663,10 +659,8 @@ class YKMHSource extends ComicSource {
                         }
                     }
                     if (groupedChapters.size > 1) {
-                        console.log("使用多分组模式");
                         return groupedChapters;
                     }
-                    console.log("使用合并模式");
                     return allChaptersMap;
                     
                 } catch (error) {

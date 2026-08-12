@@ -15,7 +15,7 @@ class MH1234 extends ComicSource {
     // unique id of the source
     key = "mh1234"
 
-    version = "1.0.1"
+    version = "1.0.2"
 
     minAppVersion = "1.4.0"
 
@@ -183,7 +183,6 @@ class MH1234 extends ComicSource {
                 return this.parseComics(res.body, true);
             } else {
                 const res = await Network.get(`${this.baseUrl}/list/?filter=${params}-${options[0]}-${options[1]}-${options[2]}&sort=${options[3]}&page=${page}`, this.webHeaders);
-                console.warn(`${this.baseUrl}/list/?filter=${params}-${options[0]}-${options[1]}-${options[2]}&sort=${options[3]}&page=${page}`)
                 if (res.status !== 200) {
                     throw `Invalid status code: ${res.status}`;
                 }
@@ -241,7 +240,7 @@ class MH1234 extends ComicSource {
     /// search related
     search = {
         load: async (keyword, options, page) => {
-            const res = await Network.get(`${this.baseUrl}/search/?keywords=${keyword}&sort=${options[0]}&page=${page}`, this.webHeaders);
+            const res = await Network.get(`${this.baseUrl}/search/?keywords=${encodeURIComponent(keyword)}&sort=${options[0]}&page=${page}`, this.webHeaders);
             if (res.status !== 200) {
                 throw `Invalid status code: ${res.status}`;
             }
@@ -296,8 +295,8 @@ class MH1234 extends ComicSource {
                 cover: cover,
                 description: description,
                 tags: {
-                    "作者": [infos[0].text.replaceAll("\n", "").replaceAll("\r", "").trim()],
-                    "更新": [infos[3].querySelector(".date").text],
+                    "作者": [infos[0]?.text?.replaceAll("\n", "").replaceAll("\r", "").trim() || ""],
+                    "更新": [infos[3]?.querySelector(".date")?.text || ""],
                     "标签": tags.slice(0,-1)
                 },
                 chapters: chapters,

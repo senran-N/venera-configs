@@ -17,7 +17,7 @@ class Nhentai extends ComicSource {
     // unique id of the source
     key = "nhentai"
 
-    version = "1.1.1"
+    version = "1.1.2"
 
     minAppVersion = "1.0.0"
 
@@ -734,12 +734,19 @@ class Nhentai extends ComicSource {
          */
         load: async (keyword, options, page) => {
             let sort = options[0] || "date"
+            // 第一页结果缓存 60s (nhentai API 限速 ~1req/2s, 防 429)
+            const cacheKey = `${keyword}|${sort}|${page}`
+            if (this.searchCache?.key === cacheKey && Date.now() - this.searchCache.time < 60000) {
+                return this.searchCache.data;
+            }
             let url = `${this.apiBaseUrl}/search?query=${encodeURIComponent(keyword)}&page=${page}&sort=${sort}`
             let res = await Network.get(url, this.getApiBaseHeaders());
             if(res.status !== 200) {
                 throw "Invalid Status Code: " + res.status
             }
-            return this.parseComicListFromApi(JSON.parse(res.body))
+            let result = this.parseComicListFromApi(JSON.parse(res.body))
+            this.searchCache = { key: cacheKey, time: Date.now(), data: result };
+            return result
         },
 
         // provide options for search

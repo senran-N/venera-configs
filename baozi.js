@@ -15,7 +15,7 @@ class Baozi extends ComicSource {
   // 唯一标识符
   key = "baozi";
 
-  version = "1.1.7";
+  version = "1.1.8";
 
   minAppVersion = "1.0.0";
 
@@ -304,7 +304,7 @@ class Baozi extends ComicSource {
   /// 搜索
   search = {
     load: async (keyword, options, page) => {
-      let res = await Network.get(`${this.baseUrl}/search?q=${keyword}`, this.webHeaders);
+      let res = await Network.get(`${this.baseUrl}/search?q=${encodeURIComponent(keyword)}`, this.webHeaders);
       if (res.status !== 200) {
         throw "Invalid status code: " + res.status;
       }
@@ -330,7 +330,8 @@ class Baozi extends ComicSource {
     addOrDelFavorite: async (comicId, folderId, isAdding) => {
       if (!isAdding) {
         let res = await Network.post(
-          `${this.baseUrl}/user/operation_v2?op=del_bookmark&comic_id=${comicId}`
+          `${this.baseUrl}/user/operation_v2?op=del_bookmark&comic_id=${comicId}`,
+          this.webHeaders
         );
         if (!res.status || res.status >= 400) {
           throw "Invalid status code: " + res.status;
@@ -338,7 +339,8 @@ class Baozi extends ComicSource {
         return "ok";
       } else {
         let res = await Network.post(
-          `${this.baseUrl}/user/operation_v2?op=set_bookmark&comic_id=${comicId}&chapter_slot=0`
+          `${this.baseUrl}/user/operation_v2?op=set_bookmark&comic_id=${comicId}&chapter_slot=0`,
+          this.webHeaders
         );
         if (!res.status || res.status >= 400) {
           throw "Invalid status code: " + res.status;

@@ -3,6 +3,37 @@
 const JCOMIC_BASE = "https://jcomic.net";
 const JCOMIC_REFERER = JCOMIC_BASE + "/";
 
+// 标准 base64 解码 (Venera 运行时无 atob)
+function decodeBase64(str) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  str = str.replace(/=+$/, "");
+  let result = "";
+  let i = 0;
+  while (i < str.length) {
+    const enc1 = chars.indexOf(str.charAt(i));
+    const enc2 = chars.indexOf(str.charAt(i + 1));
+    const enc3 = str.charAt(i + 2) ? chars.indexOf(str.charAt(i + 2)) : -1;
+    const enc4 = str.charAt(i + 3) ? chars.indexOf(str.charAt(i + 3)) : -1;
+    if (enc1 < 0 || enc2 < 0) throw "Invalid base64 character";
+    result += String.fromCharCode((enc1 << 2) | (enc2 >> 4));
+    if (enc3 >= 0) result += String.fromCharCode(((enc2 & 15) << 4) | (enc3 >> 2));
+    if (enc4 >= 0) result += String.fromCharCode(((enc3 & 3) << 6) | enc4);
+    i += 4;
+  }
+  return result;
+}
+
+// jcomic 图片反爬解密: data-locked="JCOMIC_TRAP_<反转的base64>" -> 真实图片 URL
+function decodeLockedImage(lockedStr) {
+  if (!lockedStr || !lockedStr.startsWith("JCOMIC_TRAP_")) return null;
+  try {
+    const clean = lockedStr.replace("JCOMIC_TRAP_", "").split('').reverse().join('');
+    return decodeBase64(clean);
+  } catch (e) {
+    return null;
+  }
+}
+
 function trimTitle(raw) {
   if (!raw) return "";
   const idx = raw.lastIndexOf(" (");
@@ -126,7 +157,7 @@ class JComic extends ComicSource {
   name = "jcomic.net";
   key = "jcomic";
 
-  version = "1.0.0";
+  version = "1.0.1";
   minAppVersion = "1.4.6";
 
   url =
@@ -452,7 +483,17 @@ class JComic extends ComicSource {
 
       const doc = new HtmlDocument(resp.body);
       const imgs = doc.querySelectorAll("img.comic-thumb");
-      const images = Array.from(imgs).map((img) => img.attributes["src"]);
+      const images = [];
+      for (const img of imgs) {
+        const src = img.attributes["src"];
+        if (src) {
+          images.push(src);
+          continue;
+        }
+        // 反爬陷阱: src 为空时从 data-locked 解密真实 URL
+        const decoded = decodeLockedImage(img.attributes["data-locked"]);
+        if (decoded) images.push(decoded);
+      }
 
       return { images };
     },

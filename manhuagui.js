@@ -4,7 +4,7 @@ class ManHuaGui extends ComicSource {
 
   key = "ManHuaGui";
 
-  version = "1.2.1";
+  version = "1.2.2";
 
   minAppVersion = "1.4.0";
 
@@ -1035,7 +1035,15 @@ class ManHuaGui extends ComicSource {
     loadEp: async (comicId, epId) => {
       let url = `${this.baseUrl}/comic/${comicId}/${epId}.html`;
       let document = await this.getHtml(url);
-      let script = document.querySelectorAll("script")[4].innerHTML;
+      // 按内容找 packer 脚本 (原硬编码 script[4], 页面结构一变就解析失败)
+      let script = null;
+      for (let s of document.querySelectorAll("script")) {
+        if (s.innerHTML.includes("}(") && s.innerHTML.includes("LZString")) {
+          script = s.innerHTML;
+          break;
+        }
+      }
+      if (!script) throw "无法找到章节数据脚本";
       let infos = this.getImgInfos(script);
 
       let imgDomain = `https://us.hamreus.com`;

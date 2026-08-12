@@ -12,7 +12,7 @@ class MXS extends ComicSource {
     // 漫画源基本信息
     name = "漫小肆";
     key = "mxs";
-    version = "1.0.1";
+    version = "1.0.2";
     minAppVersion = "1.5.0";
     url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/mxs.js";
 
@@ -478,6 +478,7 @@ class MXS extends ComicSource {
             const imageElems = doc.querySelectorAll("img.lazy");
             for (let img of imageElems) {
                 const src = img.attributes?.["data-original"];
+                if (!src) continue;
                 const image = src.replace(/https?:\/\/[^\/]+/, this.baseUrl);
                 if (image) images.push(image);
             }

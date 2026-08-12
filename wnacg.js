@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.6"
+    version = "1.0.7"
 
     minAppVersion = "1.0.0"
 
@@ -713,10 +713,11 @@ class Wnacg extends ComicSource {
             if (res.status !== 200) {
                 throw `Invalid Status Code ${res.status}`
             }
-            const regex = RegExp(String.raw`//[^"]+/[^"]+\.[^"]+`, 'g');
+            // 只提取图片 URL (过滤 JS/CSS/广告链接, 避免坏图)
+            const regex = RegExp(String.raw`//[^"]+/[^"]+\.(?:jpg|jpeg|png|webp|gif|jpe)`, 'gi');
             const matches = Array.from(res.body.matchAll(regex));
             return {
-                images: matches.map((e) => 'https:' + e[0].substring(0, e[0].length - 1))
+                images: matches.map((e) => 'https:' + e[0])
             }
         },
         /**
