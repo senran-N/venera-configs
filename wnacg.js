@@ -2,7 +2,7 @@ class Wnacg extends ComicSource {
   // 统一请求头 (防封: 模拟真实浏览器, Referer 跟随域名设置)
   get webHeaders() {
     return {
-      "User-Agent": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
       "Referer": this.baseUrl + "/",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
       "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.7"
+    version = "1.0.8"
 
     minAppVersion = "1.0.0"
 
@@ -428,7 +428,10 @@ class Wnacg extends ComicSource {
                 comics.push(this.parseComic(comicElement))
             }
             let pagesLink = document.querySelectorAll("div.f_left.paginator > a");
-            let pages = Number(pagesLink[pagesLink.length - 1].text)
+            let pages = 1
+            if (pagesLink.length > 0) {
+                pages = Number(pagesLink[pagesLink.length - 1].text)
+            }
             document.dispose()
             return {
                 comics: comics,
@@ -498,9 +501,12 @@ class Wnacg extends ComicSource {
             for (let comicElement of comicElements) {
                 comics.push(this.parseComic(comicElement))
             }
-            let total = document.querySelectorAll("p.result > b")[0].text.replaceAll(',', '')
+            let total = document.querySelectorAll("p.result > b")
             const comicsPerPage = 24
-            let pages = Math.ceil(Number(total) / comicsPerPage)
+            let pages = 1
+            if (total.length > 0) {
+                pages = Math.ceil(Number(total[0].text.replaceAll(',', '')) / comicsPerPage)
+            }
             document.dispose()
             return {
                 comics: comics,
@@ -693,8 +699,14 @@ class Wnacg extends ComicSource {
                 return 'https:' + e.attributes["src"]
             })
             next = (Number(next) + 1).toString()
-            let pagesLink = document.querySelector("div.f_left.paginator").children
-            if (pagesLink[pagesLink.length - 1].classNames.includes("thispage")) {
+            let paginator = document.querySelector("div.f_left.paginator")
+            if (paginator) {
+                let pagesLink = paginator.children
+                if (pagesLink[pagesLink.length - 1].classNames.includes("thispage")) {
+                    next = null
+                }
+            } else {
+                // 无分页器说明只有一页
                 next = null
             }
             return {
