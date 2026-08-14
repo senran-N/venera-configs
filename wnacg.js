@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.10"
+    version = "1.0.11"
 
     minAppVersion = "1.0.0"
 
@@ -561,7 +561,9 @@ class Wnacg extends ComicSource {
          * @returns {Promise<{comics: Comic[], maxPage: number}>}
          */
         load: async (keyword, options, page) => {
-            let url = `${this.baseUrl}/search/?q=${encodeURIComponent(keyword)}&f=_all&s=create_time_DESC&syn=yes`
+            // 搜索排序: 站点支持 s=create_time_DESC/ASC、comment、favorite (实测有效)
+            let sort = (options && options[0]) ? options[0] : "create_time_DESC"
+            let url = `${this.baseUrl}/search/?q=${encodeURIComponent(keyword)}&f=_all&s=${sort}&syn=yes`
             if (page !== 0) {
                 url += `&p=${page}`
             }
@@ -587,6 +589,20 @@ class Wnacg extends ComicSource {
                 maxPage: pages,
             }
         },
+
+        // provide options for search
+        optionList: [
+            {
+                type: "select",
+                options: [
+                    "create_time_DESC-最新",
+                    "create_time_ASC-最早",
+                    "comment-最多評論",
+                    "favorite-最多收藏",
+                ],
+                label: "排序",
+            }
+        ],
     }
 
     // favorite related
