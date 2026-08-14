@@ -17,7 +17,7 @@ class Nhentai extends ComicSource {
     // unique id of the source
     key = "nhentai"
 
-    version = "1.1.2"
+    version = "1.1.3"
 
     minAppVersion = "1.0.0"
 
@@ -205,11 +205,25 @@ class Nhentai extends ComicSource {
             }
         }
 
+        // v2 list API may return either the legacy flat fields
+        // (english_title/japanese_title + string thumbnail) or the newer
+        // nested format (title object + cover/thumbnail object with .path).
+        let title =
+            item.english_title ||
+            item.japanese_title ||
+            item.title?.english ||
+            item.title?.pretty ||
+            item.title?.japanese ||
+            String(item.id);
+        let thumb =
+            typeof item.thumbnail === "string" ? item.thumbnail :
+            (item.thumbnail?.path || item.cover?.path || "");
+
         return new Comic({
             id: String(item.id),
-            title: item.english_title || item.japanese_title || String(item.id),
+            title: title,
             subtitle: "",
-            cover: this.toAbsoluteMediaUrl(item.thumbnail, true),
+            cover: this.toAbsoluteMediaUrl(thumb, true),
             tags: tagsRes,
             description: String(item.id),
             language: lang,
@@ -892,6 +906,10 @@ class Nhentai extends ComicSource {
                     related: related,
                     url: `${this.baseUrl}/g/${id}/`,
                 })
+                // 单个 gallery 即一个章节
+                let chapters = new Map();
+                chapters.set("1", title || String(id));
+                comic.chapters = chapters
                 comic.csrfToken = ""
                 return comic
             }
@@ -964,6 +982,10 @@ class Nhentai extends ComicSource {
                 url: `${this.baseUrl}/g/${id}/`,
             })
             comic.csrfToken = csrfToken
+            // 单个 gallery 即一个章节
+            let chapters = new Map();
+            chapters.set("1", title || String(id));
+            comic.chapters = chapters
             return comic
         },
         /**

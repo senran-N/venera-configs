@@ -15,7 +15,7 @@ class MH1234 extends ComicSource {
     // unique id of the source
     key = "mh1234"
 
-    version = "1.0.2"
+    version = "1.1.0"
 
     minAppVersion = "1.4.0"
 
@@ -26,12 +26,58 @@ class MH1234 extends ComicSource {
         domains: {
             title: "域名",
             type: "input",
-            default: "amh1234.com"
+            default: "wmh1234.com"
         }
     }
 
+    // 新版站点使用移动端域名 m.xxx.com (b.xxx.com 已失效)
     get baseUrl() {
-        return `https://b.${this.loadSetting('domains')}`;
+        let domain = this.loadSetting('domains') || this.settings.domains.default;
+        domain = domain.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+        if (domain.indexOf("://") < 0 && domain.indexOf("m.") !== 0 && domain.indexOf("www.") !== 0 && !domain.startsWith("reader.")) {
+            domain = "m." + domain;
+        }
+        return `https://${domain}`;
+    }
+
+    // 通用的卡片解析 (首页/搜索/分类通用)
+    parseComicCard(elm) {
+        const link = elm.querySelector("a.comic-card__link");
+        if (!link) return null;
+        const href = link.attributes["href"] || "";
+        const m = href.match(/\/(\d+)\.html/);
+        if (!m) return null;
+        const img = elm.querySelector("img.comic-card__image");
+        let cover = "";
+        if (img) cover = (img.attributes["data-src"] || img.attributes["src"] || "").trim();
+        // 标题优先取 img alt
+        let title = "";
+        if (img && img.attributes["alt"]) title = img.attributes["alt"].trim();
+        if (!title) {
+            const t = elm.querySelector(".comic-card__title");
+            if (t) title = t.text.trim();
+        }
+        let subTitle = "";
+        const ch = elm.querySelector(".comic-card__chapter");
+        if (ch) subTitle = ch.text.trim();
+        return new Comic({
+            id: m[1],
+            title,
+            cover,
+            subTitle,
+            description: subTitle,
+        });
+    }
+
+    // 解析漫画网格 (.comic-grid > article.comic-card)
+    parseComicGrid(doc) {
+        const comics = [];
+        const cards = doc.querySelectorAll("article.comic-card");
+        for (const card of cards) {
+            const c = this.parseComicCard(card);
+            if (c) comics.push(c);
+        }
+        return comics;
     }
 
     // explore page list
@@ -45,20 +91,32 @@ class MH1234 extends ComicSource {
                 throw `Invalid status code: ${res.status}`;
             }
             const doc = new HtmlDocument(res.body);
-            const mangaLists = doc.querySelectorAll("div.imgBox");
-            for (let list of mangaLists) {
-                const tabTitle = list.querySelector(".Title").text;
-                const items = [];
-                for (let item of list.querySelectorAll("li.list-comic")) {
-                    const info = item.querySelectorAll("a")[1];
-                    items.push(new Comic({
-                        id: item.attributes["data-key"],
-                        title: item.querySelector("a.txtA").text,
-                        cover: item.querySelector("img").attributes["src"]
-                    }));
+            // 每个板块: section.comic-section > h2.section-title + .comic-grid
+            const sections = doc.querySelectorAll("section.comic-section");
+            if (sections.length > 0) {
+                for (const sec of sections) {
+                    const titleEl = sec.querySelector("h2.section-title");
+                    const title = titleEl ? titleEl.text.trim() : "";
+                    const comics = [];
+                    const cards = sec.querySelectorAll("article.comic-card");
+                    for (const card of cards) {
+                        const c = this.parseComicCard(card);
+                        if (c) comics.push(c);
+                    }
+                    if (comics.length > 0 && title) {
+                        result[title] = comics;
+                    }
                 }
-                result[tabTitle] = items;
+                return result;
             }
+            // 兜底: 整页卡片归为一个板块
+            const all = doc.querySelectorAll("article.comic-card");
+            const comics = [];
+            for (const card of all) {
+                const c = this.parseComicCard(card);
+                if (c) comics.push(c);
+            }
+            if (comics.length > 0) result["漫画1234"] = comics;
             return result;
         }
     }];
@@ -147,92 +205,35 @@ class MH1234 extends ComicSource {
         enableRankingPage: false,
     }
 
-    parseComics(html, onePage = false) {
-        const doc = new HtmlDocument(html);
-        const comics = [];
-        for (let comic of doc.querySelectorAll(".itemBox")) {
-            comics.push(new Comic({
-                id: comic.attributes["data-key"],
-                title: comic.querySelector(".title").text,
-                cover: comic.querySelector("img").attributes["src"]
-            }));
-        }
-        return {comics: comics, maxPage: onePage ? 1 : parseInt(doc.querySelector("#total-page").attributes["value"])};
-    }
-
-    parseList(doc) {
-        const comics = [];
-        for (let comic of doc.querySelectorAll(".list-comic")) {
-            comics.push(new Comic({
-                id: comic.attributes["data-key"],
-                title: comic.querySelector(".txtA").text,
-                cover: comic.querySelector("img").attributes["src"]
-            }));
-        }
-        return comics;
-    }
-
-    /// category comic loading related
+    // 分类漫画加载: 站点分类改为 /category/ 与 /category/tags/{id},
+    // 为兼容旧参数列表, 统一使用站内分类列表(全部漫画)并按页加载
     categoryComics = {
         load: async (category, params, options, page) => {
-            if (params.endsWith(".html")) {
-                const res = await Network.get(`${this.baseUrl}${params}`, this.webHeaders);
-                if (res.status !== 200) {
-                    throw `Invalid status code: ${res.status}`;
-                }
-                return this.parseComics(res.body, true);
+            let url;
+            if (params && params !== "") {
+                url = `${this.baseUrl}/category/tags/${encodeURIComponent(params)}`;
             } else {
-                const res = await Network.get(`${this.baseUrl}/list/?filter=${params}-${options[0]}-${options[1]}-${options[2]}&sort=${options[3]}&page=${page}`, this.webHeaders);
-                if (res.status !== 200) {
-                    throw `Invalid status code: ${res.status}`;
-                }
-                const doc = new HtmlDocument(res.body);
-                return {comics: this.parseList(doc),
-                    maxPage: parseInt(doc.querySelector("#total-page").attributes["value"])};
+                url = page <= 1 ? `${this.baseUrl}/category/` : `${this.baseUrl}/category/page/${page}`;
             }
+            const res = await Network.get(url, this.webHeaders);
+            if (res.status !== 200) {
+                throw `Invalid status code: ${res.status}`;
+            }
+            const doc = new HtmlDocument(res.body);
+            const comics = this.parseComicGrid(doc);
+            // 尝试解析最大页数
+            let maxPage = page;
+            const pageLinks = doc.querySelectorAll("a");
+            for (const a of pageLinks) {
+                const href = (a.attributes["href"] || "").match(/page\/(\d+)/);
+                if (href) {
+                    const n = parseInt(href[1], 10);
+                    if (n > maxPage) maxPage = n;
+                }
+            }
+            return { comics, maxPage };
         },
         optionLoader: async (category, params) => {
-            if (!params.endsWith(".html")) {
-                return [
-                    {
-                        options: [
-                            "-全部",
-                            "ertong-儿童漫画",
-                            "shaonian-少年漫画",
-                            "shaonv-少女漫画",
-                            "qingnian-青年漫画",
-                            "bailingmanhua-白领漫画",
-                            "tongrenmanhua-同人漫画"
-                        ]
-                    },
-                    {
-                        options: [
-                            "-全部",
-                            "wanjie-已完结",
-                            "lianzai-连载中",
-                        ]
-                    },
-                    {
-                        options: [
-                            "-全部",
-                            "rhmh-日韩",
-                            "dlmh-大陆",
-                            "gtmh-港台",
-                            "taiwan-台湾",
-                            "ommh-欧美",
-                            "hanguo-韩国",
-                            "qtmg-其他",
-                        ]
-                    },
-                    {
-                        options: [
-                            "update-更新",
-                            "post-发布",
-                            "click-点击",
-                        ]
-                    },
-                ];
-            }
             return [];
         }
     }
@@ -240,24 +241,20 @@ class MH1234 extends ComicSource {
     /// search related
     search = {
         load: async (keyword, options, page) => {
-            const res = await Network.get(`${this.baseUrl}/search/?keywords=${encodeURIComponent(keyword)}&sort=${options[0]}&page=${page}`, this.webHeaders);
+            const res = await Network.get(`${this.baseUrl}/search/?keywords=${encodeURIComponent(keyword)}&page=${page}`, this.webHeaders);
             if (res.status !== 200) {
                 throw `Invalid status code: ${res.status}`;
             }
-            return this.parseComics(res.body);
+            const doc = new HtmlDocument(res.body);
+            const comics = this.parseComicGrid(doc);
+            return {
+                comics,
+                maxPage: 1
+            };
         },
 
         // provide options for search
-        optionList: [
-            {
-                options: [
-                    "update-更新",
-                    "post-发布",
-                    "click-点击",
-                ],
-                label: "排序"
-            }
-        ],
+        optionList: [],
 
         // enable tags suggestions
         enableTagsSuggestions: false,
@@ -271,55 +268,133 @@ class MH1234 extends ComicSource {
                 throw `Invalid status code: ${res.status}`;
             }
             const doc = new HtmlDocument(res.body);
-            const title = doc.querySelector(".BarTit").text;
-            const cover = doc.querySelector(".pic").querySelector("img").attributes["src"];
-            const description = doc.querySelector("#full-des")?.text;
-            const infos = doc.querySelectorAll(".txtItme");
+
+            // 标题
+            let title = "";
+            const h1 = doc.querySelector("h1.comic-hero__title");
+            if (h1) {
+                title = h1.text.trim().replace(/漫画$/, "");
+            }
+            if (!title) {
+                const coverImg = doc.querySelector(".comic-hero__cover img");
+                if (coverImg && coverImg.attributes["alt"]) title = coverImg.attributes["alt"].trim();
+            }
+
+            // 封面
+            let cover = "";
+            const coverEl = doc.querySelector(".comic-hero__cover img");
+            if (coverEl) cover = (coverEl.attributes["src"] || coverEl.attributes["data-src"] || "").trim();
+
+            // 简介
+            let description = "";
+            const descEl = doc.querySelector("#comicDesc");
+            if (descEl) description = descEl.text.trim();
+
+            // 作者 & 标签
+            let author = "";
             const tags = [];
-            for (let tag of doc.querySelector(".sub_r").querySelectorAll("a")) {
-                const tag_name = tag.text;
-                if (tag_name.length > 0) {
-                    tags.push(tag_name);
+            const metaItems = doc.querySelectorAll(".comic-hero__meta .meta-item");
+            if (metaItems.length > 0) {
+                author = metaItems[0] ? metaItems[0].text.trim() : "";
+                for (let i = 1; i < metaItems.length; i++) {
+                    const t = metaItems[i].text.trim();
+                    if (t) tags.push(t);
                 }
             }
+
+            // 状态
+            let status = "";
+            const statItems = doc.querySelectorAll(".comic-hero__stats .stat-item");
+            for (const s of statItems) {
+                const label = s.querySelector(".stat-label");
+                if (label && label.text.includes("状态")) {
+                    const val = s.querySelector(".stat-value");
+                    if (val) status = val.text.trim();
+                }
+            }
+
+            // 章节
             const chapters = {};
-            const chapterElements = doc.querySelector(".chapter-warp")?.querySelectorAll("li");
-            if (chapterElements) {
-                for (let ch of chapterElements) {
-                    const id = ch.querySelector("a").attributes["href"].replace("/comic/", "").replace(".html", "").split("/").join("_");
-                    chapters[id] = ch.querySelector("span").text;
+            const chapterItems = doc.querySelectorAll(".chapter-list a.chapter-item");
+            for (const a of chapterItems) {
+                const href = a.attributes["href"] || "";
+                const m = href.match(/\/go\/([^\s"']+)/);
+                if (m) {
+                    const token = m[1];
+                    const span = a.querySelector(".chapter-title");
+                    const name = span ? span.text.trim() : token;
+                    // dedupe 同名章节 (网页里可能重复)
+                    if (!(token in chapters)) {
+                        chapters[token] = name;
+                    }
                 }
             }
+
+            // 推荐
+            const recommend = this.parseComicGrid(doc).filter(c => c.id !== id).slice(0, 12);
+
             return {
-                title: title,
-                cover: cover,
-                description: description,
+                title,
+                cover,
+                description,
                 tags: {
-                    "作者": [infos[0]?.text?.replaceAll("\n", "").replaceAll("\r", "").trim() || ""],
-                    "更新": [infos[3]?.querySelector(".date")?.text || ""],
-                    "标签": tags.slice(0,-1)
+                    "作者": [author],
+                    "状态": [status],
+                    "标签": tags,
                 },
                 chapters: chapters,
-                recommend: this.parseList(doc)
+                recommend,
+                url: `${this.baseUrl}/comic/${id}.html`,
             };
-
         },
 
         loadEp: async (comicId, epId) => {
-            const ids = epId.split("_");
-            const res = await Network.get(`${this.baseUrl}/comic/${ids[0]}/${ids[1]}.html`, this.webHeaders);
-            if (res.status !== 200) {
-                throw `Invalid status code: ${res.status}`;
+            // epId 为章节 token (base64: {comicId}-{chapterId}-{hash})
+            // 1. 请求 /go/{token}, 从 JS 跳转中拿到阅读器地址
+            const images = [];
+            let readerUrl = "";
+            let body = "";
+            try {
+                const goRes = await Network.get(`${this.baseUrl}/go/${epId}`, this.webHeaders);
+                body = goRes.body || "";
+            } catch (e) {
+                throw `获取章节失败: ${e.message || e}`;
             }
-            const html = res.body;
-            const start = html.search(`var chapterImages = `) + 22;
-            const end = html.search(`;var chapterPath = `) - 2;
-            const end2 = html.search(`;var chapterPrice`) - 1;
-            const images = html.substring(start, end).split(`","`);
-            const cpath = html.substring(end + 22, end2);
-            for (let i = 0; i < images.length; i++) {
-                images[i] = "https://gmh1234.wszwhg.net/" + cpath + images[i].replaceAll("\\", "");
-                images[i] = images[i].replaceAll("//", "/");
+            const locMatch = (body || "").match(/location\.(?:replace|href)\s*=\s*["']([^"']+)["']/);
+            if (locMatch) {
+                readerUrl = locMatch[1];
+            }
+            // 兜底: 直接构造阅读器地址
+            if (!readerUrl) {
+                readerUrl = `https://reader.hqread.cc/r/${epId}`;
+            }
+
+            const readerHeaders = Object.assign({}, this.webHeaders);
+            // 阅读器与主站不同域, 需要独立 Referer
+            readerHeaders["Referer"] = `${this.baseUrl}/go/${epId}`;
+            let readerBody = "";
+            try {
+                const readerRes = await Network.get(readerUrl, readerHeaders);
+                if (readerRes.status !== 200) {
+                    throw `阅读器返回状态码: ${readerRes.status}`;
+                }
+                readerBody = readerRes.body || "";
+            } catch (e) {
+                throw `获取阅读器失败: ${e.message || e}`;
+            }
+
+            // 2. 解析图片 data-src
+            const doc = new HtmlDocument(readerBody);
+            const imgNodes = doc.querySelectorAll("img.reader-image");
+            if (imgNodes.length === 0) {
+                // 兜底: 任意带 data-src 的 img
+                const fallback = doc.querySelectorAll("img[data-src]");
+                for (const img of fallback) images.push(img.attributes["data-src"]);
+            } else {
+                for (const img of imgNodes) {
+                    const src = img.attributes["data-src"] || img.attributes["src"];
+                    if (src) images.push(src);
+                }
             }
             return { images };
         },

@@ -8,7 +8,7 @@ class Baihehui extends ComicSource {
     // unique id of the source
     key = "baihehui"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.4.0"
 
@@ -428,6 +428,7 @@ explore = [
          * @returns {Promise<{comics: Comic[], maxPage: number}>}
          */
         load: async (keyword, options, page) => {
+            // 当前站点搜索已登录墙: 未登录访问 /search/* 会被服务端 302 到 /user/login。
             let url = `https://www.yamibo.com/search/manga?SearchForm%5Bkeyword%5D=${encodeURIComponent(keyword)}&page=${page}`;
     let res = await Network.get(url, {
         headers: {
@@ -440,6 +441,11 @@ explore = [
     }
 
     let document = new HtmlDocument(res.body);
+    // 检测登录墙: 被重定向到登录页时抛出明确提示
+    if (document.querySelector('#login-form')) {
+        document.dispose();
+        throw '该站点搜索需要登录账号后才能使用。请在 App 中登录 yamibo 账号后重试。';
+    }
     // 获取最大页数
     let lastPageElement = document.querySelector('li.last > a');
     let maxPage = lastPageElement ? parseInt(lastPageElement.attributes['data-page']) + 1 : 1;

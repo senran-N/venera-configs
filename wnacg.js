@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.8"
+    version = "1.0.9"
 
     minAppVersion = "1.0.0"
 
@@ -175,21 +175,66 @@ class Wnacg extends ComicSource {
     }
 
     parseComic(c) {
-        let link = c.querySelector("div.pic_box > a").attributes["href"];
-        let id = RegExp("(?<=-aid-)[0-9]+").exec(link)[0];
-        let image =
-            c.querySelector("div.pic_box > a > img").attributes["src"];
+        // c 通常为 li.gallary_item；当部分解析器丢弃 li 结构时，
+        // 也可传入 div.pic_box 元素。这里兼容两种输入。
+        let box, link, img
+        if (c.localName === "div" && (c.classNames || []).indexOf("pic_box") >= 0) {
+            box = c
+            link = box.querySelector("a")
+            img = link ? link.querySelector("img") : null
+        } else {
+            box = c.querySelector ? c.querySelector("div.pic_box") : null
+            link = box ? box.querySelector("a") : null
+            img = link ? link.querySelector("img") : null
+        }
+        let href = link && link.attributes ? link.attributes["href"] : null
+        let id = RegExp("(?<=-aid-)[0-9]+").exec(href)[0];
+        let image = img && img.attributes ? img.attributes["src"] : null
         image = `https:${image}`;
-        let name = c.querySelector("div.info > div.title > a").text;
-        let info = c.querySelector("div.info > div.info_col").text.trim();
-        info = info.replaceAll('\n', '');
-        info = info.replaceAll('\t', '');
+        // 标题: 优先取 info 块文本; 若解析器丢弃了 info 块, 回退到 <a> 的 title 属性
+        let nameEl = c.querySelector ? c.querySelector("div.info > div.title > a") : null
+        let name = nameEl ? nameEl.text : null
+        if (!name) {
+            let t = link && link.attributes ? link.attributes["title"] : null
+            name = t || (img && img.attributes ? img.attributes["alt"] : null)
+        }
+        let info = ""
+        let infoEl = c.querySelector ? c.querySelector("div.info > div.info_col") : null
+        if (infoEl) {
+            info = infoEl.text.trim()
+            info = info.replaceAll('\n', '').replaceAll('\t', '')
+        }
         return new Comic({
             id: id,
             title: name,
             cover: image,
             description: info,
         })
+    }
+
+    // 全局兜底解析: 某些 HTML 解析器会把首页区块容器丢弃, 但保留叶子 div.pic_box。
+    // 这种情况下按每个 pic_box 直接构建 Comic, 归入单个分区。
+    parseComicsGlobal(document) {
+        let anchors = document.querySelectorAll("div.pic_box > a")
+        let out = []
+        for (let a of anchors) {
+            try {
+                let href = a.attributes["href"]
+                if (!href) continue
+                let id = RegExp("(?<=-aid-)[0-9]+").exec(href)
+                if (!id) continue
+                let img = a.querySelector("img")
+                let image = img && img.attributes ? img.attributes["src"] : ""
+                let name = a.attributes["title"] || (img && img.attributes ? img.attributes["alt"] : "")
+                out.push(new Comic({
+                    id: id[0],
+                    title: name,
+                    cover: `https:${image}`,
+                    description: "",
+                }))
+            } catch (e) { /* skip */ }
+        }
+        return out
     }
 
     // explore page list
@@ -216,26 +261,55 @@ class Wnacg extends ComicSource {
                     throw `Invalid Status Code ${res.status}`
                 }
                 let document = new HtmlDocument(res.body)
+                // 最近主题 (weitu) 会在多个区块上重复输出 class 属性 (如 "class=\"title_sort\" class=\"cc\"")，
+                // 部分 HTML 解析器会丢弃重复属性导致 bodywrap 丢失，因此这里不再强依赖 bodywrap 配对数。
                 let titleBlocks = document.querySelectorAll("div.title_sort");
+                // 兼容两种容器: bodywrap（标准结构）或直接是 grid
                 let comicBlocks = document.querySelectorAll("div.bodywrap");
-                if (titleBlocks.length !== comicBlocks.length) {
-                    throw "Invalid Page"
+                if (comicBlocks.length === 0) {
+                    comicBlocks = document.querySelectorAll("div.grid");
                 }
                 let result = []
                 for (let i = 0; i < titleBlocks.length; i++) {
-                    let title = titleBlocks[i].querySelector("div.title_h2").text.replaceAll(/\s+/g, '')
-                    let link = titleBlocks[i].querySelector("div.r > a").attributes["href"]
+                    let titleEl = titleBlocks[i].querySelector("div.title_h2")
+                    let title = titleEl ? titleEl.text.replaceAll(/\s+/g, '') : `Section ${i + 1}`
+                    let linkEl = titleBlocks[i].querySelector("div.r > a")
+                    let link = linkEl ? linkEl.attributes["href"] : "/albums.html"
                     let comics = []
                     let comicBlock = comicBlocks[i]
-                    let comicElements = comicBlock.querySelectorAll("div.gallary_wrap > ul.cc > li")
-                    for (let comicElement of comicElements) {
-                        comics.push(this.parseComic(comicElement))
+                    if (comicBlock) {
+                        // 宽松选择器: 兼容 bodywrap > grid 或 grid 直接作为容器
+                        let comicElements = comicBlock.querySelectorAll("ul.cc > li")
+                        if (comicElements.length === 0) {
+                            comicElements = comicBlock.querySelectorAll("li.gallary_item")
+                        }
+                        for (let comicElement of comicElements) {
+                            try {
+                                comics.push(this.parseComic(comicElement))
+                            } catch (e) { /* 跳过损坏条目 */ }
+                        }
                     }
-                    result.push({
-                        title: title,
-                        comics: comics,
-                        viewMore: `category:${title}@${link}`
-                    })
+                    if (comics.length > 0) {
+                        result.push({
+                            title: title,
+                            comics: comics,
+                            viewMore: `category:${title}@${link}`
+                        })
+                    }
+                }
+                // 兜底: 若按区块解析无结果(部分解析器丢弃了区块容器)，退化为按全局叶子节点解析
+                if (result.length === 0) {
+                    let globalComics = this.parseComicsGlobal(document)
+                    if (globalComics.length > 0) {
+                        let topTitle = "最新"
+                        let firstH2 = document.querySelector("div.title_h2")
+                        if (firstH2) topTitle = firstH2.text.replaceAll(/\s+/g, '')
+                        result.push({
+                            title: topTitle,
+                            comics: globalComics,
+                            viewMore: `category:${topTitle}@/albums.html`,
+                        })
+                    }
                 }
                 document.dispose()
                 return result
@@ -680,6 +754,8 @@ class Wnacg extends ComicSource {
                 tags: tags,
                 description: description,
                 uploader: uploader,
+                // wnacg 每个作品是单画廊: 只有一个章节 (loadEp 直接按 comicId 加载图片)
+                chapters: { "1": title },
             })
         },
         /**

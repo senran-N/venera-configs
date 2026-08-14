@@ -15,7 +15,7 @@ class Baozi extends ComicSource {
   // 唯一标识符
   key = "baozi";
 
-  version = "1.1.8";
+  version = "1.1.9";
 
   minAppVersion = "1.0.0";
 
@@ -497,8 +497,9 @@ class Baozi extends ComicSource {
     loadEp: async (comicId, epId) => {
       const images = [];
 
-      // App版链接
-      let currentPageUrl = `https://appcn.baozimh.com/baozimhapp/comic/chapter/${comicId}/0_${epId}.html`;
+      // www 主域名可访问; appcn 子域被 Cloudflare 指纹拦截返回 403
+      const chapterHost = "https://www.baozimh.com";
+      let currentPageUrl = `${chapterHost}/comic/chapter/${comicId}/0_${epId}.html`;
 
       const res = await Network.get(currentPageUrl, this.webHeaders);
       if (res.status !== 200) {
@@ -507,10 +508,14 @@ class Baozi extends ComicSource {
 
       const doc = new HtmlDocument(res.body);
 
-      // 解析当前页图片(App 版)
-      const imageNodes = doc.querySelectorAll(".comic-contain > .chapter-img");
+      // www 版页面图片节点: <amp-img class="comic-contain__item" data-src=...>
+      const imageNodes = doc.querySelectorAll(".comic-contain__item");
       imageNodes.forEach((imgNode) => {
-        let imgUrl = imgNode.querySelector(".comic-contain__item")?.attributes?.["data-src"];
+        let imgUrl = imgNode.attributes?.["data-src"];
+        if (!imgUrl) {
+          const img = imgNode.querySelector("img");
+          if (img) imgUrl = img.attributes?.["src"];
+        }
         if (imgUrl) {
           const match = imgUrl.match(/^(https?:\/\/)?([^/\s:]+)(:\d+)?(\/[a-z]comic\/.*)/);
           if (match) {

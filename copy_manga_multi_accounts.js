@@ -4,7 +4,7 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.1"
+    version = "1.4.2"
 
     minAppVersion = "1.6.0"
 
@@ -82,7 +82,7 @@ class CopyManga extends ComicSource {
 
     static defaultApiUrl = 'api.copy2000.online'
 
-    static searchApi = "/api/kb/web/searchb/comics"
+    static searchApi = "/api/kb/web/searchci/comics"
 
     get deviceinfo() {
         let info = this.loadData("_deviceinfo");
@@ -1059,6 +1059,17 @@ class CopyManga extends ComicSource {
                 }
             }
         },
+        onImageLoad: (url, comicId, epId) => {
+            // 拷贝图片 CDN（*.mangafunb.fun）按需鉴权，带 Referer 可避免热链拦截
+            return {
+                url: url,
+                headers: {
+                    "Referer": "https://www.copy20.com/",
+                    "User-Agent": "COPY/3.0.6",
+                    "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                },
+            };
+        },
         loadComments: async (comicId, subId, page, replyTo) => {
             let url = `${this.apiUrl}/api/v3/comments?comic_id=${subId}&limit=20&offset=${(page - 1) * 20}`;
             if (replyTo) {
@@ -1378,9 +1389,10 @@ class CopyManga extends ComicSource {
         let targetArr = target.split('.')
         let currentArr = current.split('.')
         for (let i = 0; i < 3; i++) {
-            if (parseInt(currentArr[i]) < parseInt(targetArr[i])) {
-                return false
-            }
+            let c = parseInt(currentArr[i]) || 0
+            let t = parseInt(targetArr[i]) || 0
+            if (c > t) return true
+            if (c < t) return false
         }
         return true
     }
@@ -1391,7 +1403,8 @@ class CopyManga extends ComicSource {
         let searchApi = ""
         if (res.status === 200) {
             let text = await res.text()
-            let match = text.match(/const countApi = "([^"]+)"/)
+            // 现场页面声明形如 `countApi = "/api/kb/web/searchci/comics"`（无 const 前缀）
+            let match = text.match(/countApi\s*=\s*"([^"]+)"/)
             if (match && match[1]) {
                 CopyManga.searchApi = match[1]
             }
@@ -1403,7 +1416,11 @@ class CopyManga extends ComicSource {
         const res = await fetch(url, { headers: this.headers });
         if (res.status === 200) {
             let data = await res.json();
-            this.settings.base_url = data.results.api[0][0];
+            // network2 偶返回无效/干扰域名（如 t66y.com），仅当发现的是合法漫画 API 域名时才覆盖
+            let entry = Array.isArray(data.results?.api?.[0]) ? data.results.api[0][0] : null;
+            if (entry && /copy/i.test(entry) && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(entry)) {
+                this.settings.base_url = entry;
+            }
         }
     }
 }

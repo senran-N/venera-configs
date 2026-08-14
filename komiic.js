@@ -6,7 +6,7 @@ class Komiic extends ComicSource {
     // 唯一标识符
     key = "Komiic"
 
-    version = "1.0.4"
+    version = "1.0.5"
 
     minAppVersion = "1.0.0"
 
@@ -27,10 +27,12 @@ class Komiic extends ComicSource {
     }
 
     async queryJson(query) {
+        // 显式序列化为 JSON 字符串, 避免宿主把对象 body 当作非 JSON 字符串处理 (部分运行时/测试环境会导致 400)
+        let body = typeof query === 'string' ? query : JSON.stringify(query)
         let res = await Network.post(
             'https://komiic.com/api/query',
             this.headers,
-            query
+            body
         )
 
         if (res.status !== 200) {
@@ -115,10 +117,10 @@ class Komiic extends ComicSource {
             let res = await Network.post(
                 'https://komiic.com/api/login',
                 this.headers,
-                {
+                JSON.stringify({
                     email: account,
                     password: pwd
-                }
+                })
             )
 
             if (res.status === 200) {

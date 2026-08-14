@@ -1059,7 +1059,7 @@ class Hitomi extends ComicSource {
   // unique id of the source
   key = "hitomi";
 
-  version = "1.2.0";
+  version = "1.2.1";
 
   minAppVersion = "1.4.6";
 
@@ -1540,11 +1540,16 @@ class Hitomi extends ComicSource {
 
       this.galleryCache = data;
 
+      // 一个 gallery 即单个章节，files 即该章节的全部图片
+      const chapters = new Map();
+      chapters.set("1", data.title || "Gallery");
+
       return new ComicDetails({
         title: data.title,
         cover: get_thumbnail_url_from_hash(data.thumbnail_hash, true),
         tags,
         maxPage: data.files.length,
+        chapters,
         thumbnails: data.files.map((n) => get_thumbnail_url_from_hash(n.hash)),
         uploadTime: formatDate(data.posted_time),
         url: data.url,

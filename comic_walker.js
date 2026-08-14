@@ -11,14 +11,14 @@ class ComicWalker extends ComicSource {
 
   name = "カドコミ";
   key = "comic_walker";
-  version = "1.0.2";
+  version = "1.0.3";
   minAppVersion = "1.6.0";
   url =
     "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/comic_walker.js";
 
   api_key = "ytBrdQ2ZYdRQguqEusVLxQVUgakNnVht";
 
-  latestVersion = "1.4.13";
+  latestVersion = "1.6.3";
 
   api_base = "https://mobileapp.comic-walker.com";
 
@@ -91,8 +91,10 @@ class ComicWalker extends ComicSource {
     const resp = await Network.get(itunes_api, this.webHeaders);
 
     if (resp.status == 200) {
-      response = JSON.parse(resp.body);
-      this.latestVersion = response.version;
+      const response = JSON.parse(resp.body);
+      if (response && response.version) {
+        this.latestVersion = response.version;
+      }
     }
 
     await this.refreshToken();
@@ -161,7 +163,7 @@ class ComicWalker extends ComicSource {
   search = {
     load: async (keyword, _, page) => {
       const res = await this.request(
-        `${this.api_base}/v1/search/comics?keyword=${keyword}&limit=20&offset=${
+        `${this.api_base}/v1/search/comics?query=${encodeURIComponent(keyword)}&limit=20&offset=${
           (page - 1) * 20
         }`,
         this.headers,

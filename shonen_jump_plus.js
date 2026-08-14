@@ -1,7 +1,7 @@
 class ShonenJumpPlus extends ComicSource {
   name = "少年ジャンプ＋";
   key = "shonen_jump_plus";
-  version = "1.1.2";
+  version = "1.1.3";
   minAppVersion = "1.2.1";
   url =
     "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/shonen_jump_plus.js";
@@ -10,7 +10,7 @@ class ShonenJumpPlus extends ComicSource {
   bearerToken = null;
   userAccountId = null;
   tokenExpiry = 0;
-  latestVersion = "4.0.24";
+  latestVersion = "4.0.38";
 
   get headers() {
     return {
@@ -32,14 +32,20 @@ class ShonenJumpPlus extends ComicSource {
   }
 
   async init() {
-    const url = "https://apps.apple.com/jp/app/id875750302";
-
-    const resp = await Network.get(url);
-
-    const match = resp.body.match(/whats-new__latest__version">[^<]*?([\d.]+)</);
-
-    if (match && match[1]) {
-      this.latestVersion = match[1];
+    // 通过 iTunes lookup 获取当前 App 版本 (比 HTML 抓取更稳定)。
+    // 服务器会校验客户端版本号, 过旧会返回 410 UPDATE_REQUIRED。
+    try {
+      const url = "https://itunes.apple.com/lookup?id=875750302&country=jp";
+      const resp = await Network.get(url);
+      if (resp.status === 200) {
+        const json = JSON.parse(resp.body);
+        const ver = json?.results?.[0]?.version;
+        if (ver && /^\d+\.\d+\.\d+$/.test(ver)) {
+          this.latestVersion = ver;
+        }
+      }
+    } catch (e) {
+      // 保持默认 latestVersion, 版本仅需 >= 最低要求即可访问
     }
   }
 
@@ -251,7 +257,7 @@ class ShonenJumpPlus extends ComicSource {
       query: GraphQLQueries[operationName],
     };
     const response = await Network.post(
-      `${this.apiBase}/graphql?opname=${operationName}`,
+      `${this.apiBase}/graphql`,
       {
         ...this.headers,
         "Authorization": `Bearer ${this.bearerToken}`,

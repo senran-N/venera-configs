@@ -8,7 +8,7 @@ class MangaDex extends ComicSource {
     // unique id of the source
     key = "manga_dex"
 
-    version = "1.1.2"
+    version = "1.1.3"
 
     minAppVersion = "1.6.0"
 
@@ -376,24 +376,23 @@ class MangaDex extends ComicSource {
          * @returns {Promise<{comics: Comic[], maxPage: number}>}
          */
         load: async (keyword, options, page) => {
-            let order = ""
-            if (options[0] !== "any") {
-                order = {
-                    "popular": `order[followedCount]=desc&`,
-                    "recent": `order[createdAt]=desc&`,
-                    "updated": `order[latestUploadedChapter]=desc&`,
-                    "rating": `order[rating]=desc&`,
-                    "follows": `order[followedCount]=desc&`
-                }[options[0]]
+            if (options == null) {
+                options = [];
             }
-            let contentRating = ""
-            if (options[1] !== "any") {
-                contentRating = `contentRating[]=${options[1]}&`
-            }
-            let status = ""
-            if (options[2] !== "any") {
-                status = `status[]=${options[2]}&`
-            }
+            // 选项为空/undefined 时不应生成非法参数 (否则 url 出现字面 `undefined` 导致 400)
+            const opt = (i) => (options[i] == null || options[i] === "" ? "" : options[i]);
+            const so = opt(0);
+            const order = {
+                "popular": `order[followedCount]=desc&`,
+                "recent": `order[createdAt]=desc&`,
+                "updated": `order[latestUploadedChapter]=desc&`,
+                "rating": `order[rating]=desc&`,
+                "follows": `order[followedCount]=desc&`
+            }[so] || "";
+            const ro = opt(1);
+            const contentRating = (ro && ro !== "any") ? `contentRating[]=${ro}&` : "";
+            const so_status = opt(2);
+            const status = (so_status && so_status !== "any") ? `status[]=${so_status}&` : "";
             let url = `https://api.mangadex.org/manga?` +
                 `includes[]=cover_art&` +
                 `includes[]=artist&` +
@@ -446,7 +445,7 @@ class MangaDex extends ComicSource {
                 }
                 keyword = reformated.join(" ")
                 if (keyword !== "")
-                    url += `&title=${keyword}`
+                    url += `&title=${encodeURIComponent(keyword)}`
             }
             let res = await fetch(url)
             if (!res.ok) {

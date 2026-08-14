@@ -10,7 +10,7 @@ class HotManga extends ComicSource {
 
     key = "hot_manga"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.6.0"
 
@@ -672,10 +672,11 @@ class HotManga extends ComicSource {
                     let imagesUrls = data.results.chapter.contents.map((e) => e.url);
 
                     // Replace origin images urls to selected quality images urls
+                    // copy_manga系图片URL形如 .../name.jpg.h1500x.webp，按所选质量(800/1200/1500)重写
                     let hdImagesUrls = imagesUrls.map((url) =>
                         url.replace(
-                            /\.jpg\.h\d+x\.jpg$/,
-                            `.jpg.h${this.imageQuality}x.jpg`
+                            /\.h\d+x\.[a-zA-Z]+$/,
+                            `.h${this.imageQuality}x.webp`
                         )
                     )
 
