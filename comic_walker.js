@@ -14,7 +14,7 @@ class ComicWalker extends ComicSource {
   version = "1.0.3";
   minAppVersion = "1.6.0";
   url =
-    "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/comic_walker.js";
+    "https://cdn.jsdelivr.net/gh/senran-N/venera-configs@main/comic_walker.js";
 
   api_key = "ytBrdQ2ZYdRQguqEusVLxQVUgakNnVht";
 

@@ -14,7 +14,7 @@ class Happy extends ComicSource {
     key = "happy"
     version = "1.0.2"
     minAppVersion = "1.6.0"
-    url = "https://cdn.jsdelivr.net/gh/venera-app/venera-configs@main/happy.js"
+    url = "https://cdn.jsdelivr.net/gh/senran-N/venera-configs@main/happy.js"
 
     // 基础URL
     baseUrl = "https://m.happymh.com"
