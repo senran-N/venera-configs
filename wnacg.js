@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.9"
+    version = "1.0.10"
 
     minAppVersion = "1.0.0"
 
@@ -746,9 +746,21 @@ class Wnacg extends ComicSource {
             let description = document.querySelector("div.asTBcell.uwconn > p").text;
             let uploader = document.querySelector("div.asTBcell.uwuinfo > a > p").text;
 
+            // wnacg 页面没有独立"作者"字段, 作者/社团名约定写在标题首对 [] 里 (如 [加濑大辉] ...)。
+            // 必须提取出来填入 subtitle + 作者标签, 否则 App 会用 uploader 顶替作者位显示。
+            let authorName = ""
+            let titleMatch = title.match(/\[([^\[\]]+)\]/)
+            if (titleMatch) {
+                authorName = titleMatch[1].trim()
+            }
+            if (authorName && !tags.has("作者")) {
+                tags.set("作者", [authorName])
+            }
+
             return new ComicDetails({
                 id: id,
                 title: title,
+                subtitle: authorName || undefined,
                 cover: cover,
                 pages: pages,
                 tags: tags,
