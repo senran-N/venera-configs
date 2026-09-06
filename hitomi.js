@@ -620,7 +620,25 @@ async function get_single_galleryblock(gid) {
     if (res.status !== 200) {
       throw new Error("galleryblock " + gid + ": " + res.status);
     }
-    const block = parseGalleryBlockInfo(res.body);
+    let block;
+    try {
+      block = parseGalleryBlockInfo(res.body);
+    } catch (e) {
+      // 单个坏块不拖垮整页 (25 个并发), 用占位块保留位置
+      block = {
+        gid: String(gid),
+        title: `Gallery ${gid}`,
+        type: undefined,
+        language: undefined,
+        artists: [],
+        series: [],
+        females: [],
+        males: [],
+        others: [],
+        thumbnail_hashs: [],
+        posted_time: new Date(0),
+      };
+    }
     galleryBlockCache.set(cacheKey, block);
     while (galleryBlockCache.size > GALLERY_BLOCK_CACHE_LIMIT) {
       const oldestKey = galleryBlockCache.keys().next().value;
@@ -780,7 +798,18 @@ async function get_image_srcs(files) {
   const real_full_path_from_hash = (hash) => {
     return hash.replace(/^.*(..)(.)$/, "$2/$1/" + hash);
   };
-  return files.map((image) => url_from_url_from_hash(0, image, "avif"));
+  return files.map((image) => url_from_url_from_hash(0, image, getPreferredImageDir(image)));
+}
+
+/**
+ * 原站 files[].hasavif 标记该图是否有 avif 版本 (画廊 JSON 实测字段)。
+ * avif 缺失的老图用 webp (站内 <img> 兜底即 webp, 全量存在)。
+ */
+function getPreferredImageDir(image) {
+  if (image && image.hasavif === 0) {
+    return "webp";
+  }
+  return "avif";
 }
 
 /**
@@ -1050,10 +1079,10 @@ function parseGalleryBlockInfo(body) {
     const gid = /-(\d+)\.html$/.exec(titleLink.attributes["href"]).at(1);
     const title = titleLink.text;
 
-    // 封面图URL
+    // 封面图URL (站内 <img> 以 data-src 懒加载为主, src 兜底)
     const thumbnail_hashs = [];
     const srcs = Array.from(mangaEl.querySelectorAll("img")).map((a) =>
-      a.attributes["data-src"].trim()
+      (a.attributes["data-src"] || a.attributes["src"] || "").trim()
     );
     srcs.forEach((src) => {
       const r = /\/(\w{64})\./.exec(src);
@@ -1239,7 +1268,7 @@ class Hitomi extends ComicSource {
   // unique id of the source
   key = "hitomi";
 
-  version = "1.2.2";
+  version = "1.2.3";
 
   minAppVersion = "1.4.6";
 
@@ -1247,15 +1276,29 @@ class Hitomi extends ComicSource {
   url = "https://cdn.jsdelivr.net/gh/senran-N/venera-configs@main/hitomi.js";
 
   galleryCache = [];
+  galleryCacheById = {};
   categoryResultCache = undefined;
   searchResultCaches = new Map();
+  // 搜索结果缓存上限, 防长会话内存膨胀 (Map 按插入序淘汰最旧)
+  searchCacheLimit = 30;
+
+  cacheSearchResult(cacheKey, value) {
+    this.searchResultCaches.set(cacheKey, value);
+    while (this.searchResultCaches.size > this.searchCacheLimit) {
+      const oldestKey = this.searchResultCaches.keys().next().value;
+      this.searchResultCaches.delete(oldestKey);
+    }
+  }
 
   _mapGalleryBlockInfoToComic(n) {
+    const thumb = n.thumbnail_hashs && n.thumbnail_hashs[0]
+      ? get_thumbnail_url_from_hash(n.thumbnail_hashs[0], true)
+      : "";
     return new Comic({
       id: n.gid,
       title: n.title,
       subTitle: n.artists.length ? n.artists.join(" ") : "",
-      cover: get_thumbnail_url_from_hash(n.thumbnail_hashs[0], true),
+      cover: thumb,
       tags: [
         ...n.series,
         ...n.females.map((m) => "f:" + m),
@@ -1568,7 +1611,7 @@ class Hitomi extends ComicSource {
           const comics = (await get_galleryblocks(result.gids)).map((n) =>
             this._mapGalleryBlockInfoToComic(n)
           );
-          this.searchResultCaches.set(cacheKey, {
+          this.cacheSearchResult(cacheKey, {
             type: "single",
             state: result.state,
             count: result.count,
@@ -1583,7 +1626,7 @@ class Hitomi extends ComicSource {
               result.gids.slice(25 * page - 25, 25 * page)
             )
           ).map((n) => this._mapGalleryBlockInfoToComic(n));
-          this.searchResultCaches.set(cacheKey, {
+          this.cacheSearchResult(cacheKey, {
             type: "all",
             gids: result.gids,
             count: result.count,
@@ -1699,6 +1742,11 @@ class Hitomi extends ComicSource {
     loadInfo: async (id) => {
       const data = await get_gallery_detail(id);
 
+      // 被屏蔽/删除的画廊 files 为空, 直接抛友好错误
+      if (data.blocked) {
+        throw new Error("This gallery has been blocked");
+      }
+
       const tags = new Map();
       if ("type" in data && data.type) tags.set("type", [data.type]);
       if (data.groups.length) tags.set("groups", data.groups);
@@ -1718,20 +1766,35 @@ class Hitomi extends ComicSource {
         );
       }
 
+      this.galleryCacheById[String(data.gid)] = data;
       this.galleryCache = data;
 
       // 一个 gallery 即单个章节，files 即该章节的全部图片
       const chapters = new Map();
       chapters.set("1", data.title || "Gallery");
 
+      // 其他语言版本 (画廊 JSON languages[] 实测字段), 过滤自身
+      const translations = (data.translations || []).filter(
+        (t) => String(t.gid) !== String(data.gid)
+      );
+      const description = translations.length
+        ? "Translations: " +
+          translations.map((t) => `${t.language} #${t.gid}`).join(", ")
+        : undefined;
+
       return new ComicDetails({
         title: data.title,
         cover: get_thumbnail_url_from_hash(data.thumbnail_hash, true),
         tags,
+        description,
         maxPage: data.files.length,
         chapters,
         thumbnails: data.files.map((n) => get_thumbnail_url_from_hash(n.hash)),
         uploadTime: formatDate(data.posted_time),
+        updateTime:
+          data.datepublished != null
+            ? formatDate(new Date(data.datepublished + "T00:00:00"))
+            : undefined,
         url: data.url,
         recommend,
       });
@@ -1743,7 +1806,16 @@ class Hitomi extends ComicSource {
      * @returns {Promise<{images: string[]}>}
      */
     loadEp: async (comicId, epId) => {
-      const data = this.galleryCache;
+      // 按 id 取缓存, 深链直达章节时缓存缺失则现取详情
+      let data = this.galleryCacheById[String(comicId)];
+      if (!data || String(data.gid) !== String(comicId)) {
+        data = await get_gallery_detail(comicId);
+        this.galleryCacheById[String(comicId)] = data;
+        this.galleryCache = data;
+      }
+      if (!data.files || data.files.length === 0) {
+        throw new Error("No images found");
+      }
       if (data.type === "anime") throw new Error("不支持视频浏览");
       const images = await get_image_srcs(data.files);
       return { images };
@@ -1841,12 +1913,34 @@ class Hitomi extends ComicSource {
         const r = reg.exec(url);
         if (r) {
           return r[1];
-        } else {
-          throw new Error("Invalid gallery url of hitomi.la");
         }
+        return null;
       },
     },
     // enable tags translate
     enableTagsTranslate: true,
+  };
+
+  // [Optional] translations for the strings in this config
+  translation = {
+    zh_CN: {
+      "Date Added": "按添加时间",
+      "Date Published": "按发布时间",
+      "Popular:Today": "今日热门",
+      "Popular:Week": "本周热门",
+      "Popular:Month": "本月热门",
+      "Popular:Year": "本年热门",
+      Random: "随机",
+    },
+    zh_TW: {
+      "Date Added": "按添加時間",
+      "Date Published": "按發佈時間",
+      "Popular:Today": "今日熱門",
+      "Popular:Week": "本週熱門",
+      "Popular:Month": "本月熱門",
+      "Popular:Year": "本年熱門",
+      Random: "隨機",
+    },
+    en: {},
   };
 }
