@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.11"
+    version = "1.0.12"
 
     minAppVersion = "1.0.0"
 
@@ -829,11 +829,34 @@ class Wnacg extends ComicSource {
             if (res.status !== 200) {
                 throw `Invalid Status Code ${res.status}`
             }
-            // 只提取图片 URL (过滤 JS/CSS/广告链接, 避免坏图)
-            const regex = RegExp(String.raw`//[^"]+/[^"]+\.(?:jpg|jpeg|png|webp|gif|jpe)`, 'gi');
-            const matches = Array.from(res.body.matchAll(regex));
+            // 只提取正文图片 URL: 限定 /data/ 路径 (过滤 JS/CSS/广告链接, 避免坏图导致后续加载卡住)
+            // 去重 + 按文件名排序, 保证 001..N 顺序 (单画廊一次性返回全部, 大画廊 200+P 注意流量)
+            const regex = RegExp(String.raw`//[^"]+/data/[^"]+\.(?:jpg|jpeg|png|webp|gif|jpe)`, 'gi');
+            const seen = new Set()
+            const images = []
+            for (let m of res.body.matchAll(regex)) {
+                let url = 'https:' + m[0]
+                if (!seen.has(url)) {
+                    seen.add(url)
+                    images.push(url)
+                }
+            }
             return {
-                images: matches.map((e) => 'https:' + e[0])
+                images: images
+            }
+        },
+        /**
+         * [Optional] provide configs for an image loading
+         * 正文/缩略图统一带浏览器头 (Referer 跟随当前域名), 防 403/防盗链, 顺带复用 webHeaders
+         */
+        onImageLoad: (url, comicId, epId) => {
+            return {
+                headers: this.webHeaders,
+            }
+        },
+        onThumbnailLoad: (url) => {
+            return {
+                headers: this.webHeaders,
             }
         },
         /**

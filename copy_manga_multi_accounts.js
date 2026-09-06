@@ -4,7 +4,7 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.2"
+    version = "1.4.4"
 
     minAppVersion = "1.6.0"
 
@@ -14,6 +14,12 @@ class CopyManga extends ComicSource {
         if (this.copyRegion === "0") {
             return "";
         }
+
+        const now = Date.now();
+        if (this._reqIdCache && now - this._reqIdCache.time < 10 * 60 * 1000) {
+            return this._reqIdCache.value;
+        }
+
         const reqIdUrl = "https://marketing.aiacgn.com/api/v2/adopr/query3/?format=json&ident=200100001";
         let reqId = "";
         try {
@@ -21,7 +27,10 @@ class CopyManga extends ComicSource {
 
             if (response.status === 200) {
                 const data = JSON.parse(response.body);
-                reqId = data.results.request_id;
+                reqId = data.results?.request_id || "";
+                if (reqId) {
+                    this._reqIdCache = { value: reqId, time: Date.now() };
+                }
             }
         } catch (e) {
         }
@@ -193,6 +202,7 @@ class CopyManga extends ComicSource {
                 let data = JSON.parse(res.body)
                 let token = data.results.token
                 this.saveData('account_token_0', token)
+                this._reqIdCache = null;
                 return "ok"
             } else {
                 throw `Invalid Status Code ${res.status}`
@@ -200,6 +210,7 @@ class CopyManga extends ComicSource {
         },
         logout: () => {
             this.deleteData('account_token_0');
+            this._reqIdCache = null;
         },
         registerWebsite: null
     }
@@ -905,14 +916,11 @@ class CopyManga extends ComicSource {
                 };
                 let keys = Object.keys(groups);
                 let result = {};
-                let futures = [];
+                // 串行拉取各分组 (并行 burst 易触发 210 限流, 导致详情慢、后续章节 40s 等待)
                 for (let group of keys) {
                     let path = groups[group]["path_word"];
-                    futures.push((async () => {
-                        result[group] = await fetchSingle(id, path);
-                    })());
+                    result[group] = await fetchSingle(id, path);
                 }
-                await Promise.all(futures);
                 if (this.isAppVersionAfter("1.3.0")) {
                     // 支持多分组
                     let sortedResult = new Map();

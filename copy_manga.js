@@ -4,7 +4,7 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.3"
+    version = "1.4.4"
 
     minAppVersion = "1.6.0"
 
@@ -655,14 +655,11 @@ class CopyManga extends ComicSource {
                 };
                 let keys = Object.keys(groups);
                 let result = {};
-                let futures = [];
+                // 串行拉取各分组 (并行 burst 易触发 210 限流, 导致详情慢、后续章节 40s 等待)
                 for (let group of keys) {
                     let path = groups[group]["path_word"];
-                    futures.push((async () => {
-                        result[group] = await fetchSingle(id, path);
-                    })());
+                    result[group] = await fetchSingle(id, path);
                 }
-                await Promise.all(futures);
                 if (this.isAppVersionAfter("1.3.0")) {
                     // 支持多分组
                     let sortedResult = new Map();
