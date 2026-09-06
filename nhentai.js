@@ -17,7 +17,7 @@ class Nhentai extends ComicSource {
     // unique id of the source
     key = "nhentai"
 
-    version = "1.1.3"
+    version = "1.1.4"
 
     minAppVersion = "1.0.0"
 
@@ -257,14 +257,131 @@ class Nhentai extends ComicSource {
         let res = await Network.get(url, this.getApiBaseHeaders());
 
         if (res.status !== 200) {
-            throw "Invalid Status Code: " + res.status
+            throw this.buildApiError(res, "Failed to load galleries")
         }
         return this.parseComicListFromApi(JSON.parse(res.body));
     }
 
-    async loadTagCategory(tagId, page = 1, sort = "") {
+    async loadTagCategory(tagId, page = 1, sort = "date") {
+        sort = this.normalizeSort(sort);
         let url =
-            `${this.apiBaseUrl}/galleries/tagged?tag_id=${tagId}&page=${page}&sort=${sort}`;
+            `${this.apiBaseUrl}/galleries/tagged?tag_id=${tagId}&page=${page}&sort=${encodeURIComponent(sort)}`;
+        return await this.loadApiGalleries(url);
+    }
+
+    // 原站排序 (逆向自 nhentai.net/search 与 /tag/<slug>/ 页面):
+    // Recent -> sort=date, Popular Today -> sort=popular-today,
+    // Popular Week -> sort=popular-week, Popular All -> sort=popular.
+    // API 额外支持 popular-month, 这里一并保留。
+    // 注意: Venera 的 optionList 用第一个 `-` 分割 value/text,
+    // value 本身不能含 `-`, 所以 UI key 用下划线, 真实 sort 用连字符。
+    normalizeSort(raw) {
+        if (raw == null) return "date";
+        let s = String(raw).trim().toLowerCase();
+        if (!s) return "date";
+        // 兼容旧 key: "/popular@today", "/", "popular-today-Popular Today" 全串等
+        // 旧 key 可能带 display 文本 (含空格), 只取空格前第一段
+        s = s.split(/\s+/)[0] || "";
+        // 去掉旧 hack 前缀 "/"
+        if (s.startsWith("/")) s = s.slice(1);
+        // 旧 hack "@" 即 "-"
+        s = s.replaceAll("@", "-").replaceAll("_", "-");
+        // 去掉可能残留的 "-recent" / "-popular..." 后缀? 不, 直接关键词匹配
+        if (s === "" || s === "/" || s === "recent" || s === "date" || s === "newest" || s === "new") {
+            return "date";
+        }
+        if (s === "popular" || s === "all" || s === "popular-all" || s === "all-time" || s === "alltime") {
+            return "popular";
+        }
+        if (s.includes("today")) return "popular-today";
+        if (s.includes("week")) return "popular-week";
+        if (s.includes("month")) return "popular-month";
+        const valid = ["date", "popular", "popular-today", "popular-week", "popular-month"];
+        if (valid.includes(s)) return s;
+        return "date";
+    }
+
+    slugifyTag(name) {
+        return String(name || "")
+            .toLowerCase()
+            .trim()
+            .replaceAll(".", "-")
+            .replaceAll("_", "-")
+            .replace(/\s+/g, "-")
+            .replace(/-+/g, "-");
+    }
+
+    normalizeTagType(param) {
+        if (!param) return "tag";
+        switch (String(param).toLowerCase()) {
+            case 'tags': return 'tag';
+            case 'languages': return 'language';
+            case 'artists': return 'artist';
+            case 'characters': return 'character';
+            case 'parodies': return 'parody';
+            case 'groups': return 'group';
+            case 'categories': return 'category';
+            case 'tag':
+            case 'language':
+            case 'artist':
+            case 'character':
+            case 'parody':
+            case 'group':
+            case 'category':
+                return String(param).toLowerCase();
+            default:
+                return String(param).toLowerCase();
+        }
+    }
+
+    async resolveTagId(tagType, slug) {
+        tagType = this.normalizeTagType(tagType);
+        slug = this.slugifyTag(slug);
+        if (!slug) return null;
+        if (!this.tagIdCache) this.tagIdCache = {};
+        let cacheKey = tagType + ":" + slug;
+        if (this.tagIdCache[cacheKey] !== undefined) {
+            return this.tagIdCache[cacheKey];
+        }
+        // 语言硬编码 (原站最常用的三个, 避免一次网络请求)
+        if (tagType === "language") {
+            let languageMap = { chinese: 29963, english: 12227, japanese: 6346 };
+            if (languageMap[slug]) {
+                this.tagIdCache[cacheKey] = languageMap[slug];
+                return languageMap[slug];
+            }
+        }
+        // 动态查询原站 API: /api/v2/tags/<type>/<slug> (逆向自 tag 页面的 sveltekit-fetched)
+        try {
+            let res = await Network.get(
+                `${this.apiBaseUrl}/tags/${encodeURIComponent(tagType)}/${encodeURIComponent(slug)}`,
+                this.getApiBaseHeaders()
+            );
+            if (res.status === 200) {
+                let body = JSON.parse(res.body);
+                if (body && body.id) {
+                    this.tagIdCache[cacheKey] = body.id;
+                    return body.id;
+                }
+            }
+        } catch (e) {
+            // 忽略, 走静态表兜底
+        }
+        // 静态表兜底 (旧数据, 仅含热门 tag)
+        let searchName = slug.replace(/\s+/g, "-");
+        for (let id in Nhentai.nhentaiTags) {
+            let tagName = Nhentai.nhentaiTags[id].toLowerCase().replace(/\s+/g, "-");
+            if (tagName === searchName) {
+                this.tagIdCache[cacheKey] = id;
+                return id;
+            }
+        }
+        return null;
+    }
+
+    async loadSearchWithSort(query, sort, page) {
+        sort = this.normalizeSort(sort);
+        let url = `${this.apiBaseUrl}/search?query=${encodeURIComponent(query)}&page=${page || 1}&sort=${encodeURIComponent(sort)}`;
         return await this.loadApiGalleries(url);
     }
 
@@ -434,13 +551,14 @@ class Nhentai extends ComicSource {
         return res
     }
 
-    async parseComicList(html, type='search') {
+    async parseComicList(html, type='search', sort='date') {
         let document = new HtmlDocument(html)
         let comicElements = document.querySelectorAll("div.gallery")
 
         let numbers = '0'
         let total = comicElements.length;
         let maxPageFromApi = null;
+        sort = this.normalizeSort(sort);
 
         switch(type) {
             case 'search':
@@ -465,7 +583,8 @@ class Nhentai extends ComicSource {
                 }
 
                 // Prefer v2 API to get accurate pagination for tag pages.
-                let res = await Network.get(`${this.apiBaseUrl}/galleries/tagged?tag_id=${tagId}`, this.getApiBaseHeaders())
+                // 带上 sort, 否则 popular 排序的 maxPage 会错 (date 有 9000+ 页, popular 只有 20 页)
+                let res = await Network.get(`${this.apiBaseUrl}/galleries/tagged?tag_id=${tagId}&sort=${encodeURIComponent(sort)}`, this.getApiBaseHeaders())
                 if(res.status !== 200) {
                     let h1 = document.querySelector("div#content > h1")?.text || ""
                     numbers = h1.match(/\d+/g)
@@ -589,28 +708,20 @@ class Nhentai extends ComicSource {
         ranking: {
             options: [
                 "date-Recent",
-                "today-Popular Today",
-                "week-Popular Week",
-                "month-Popular Month",
+                "popular_today-Popular Today",
+                "popular_week-Popular Week",
+                "popular_month-Popular Month",
                 "popular-Popular All",
             ],
             load: async (option, page) => {
-                let sortMap = {
-                    date: "date",
-                    today: "popular-today",
-                    week: "popular-week",
-                    month: "popular-month",
-                    popular: "popular"
-                };
+                let sort = this.normalizeSort(option);
 
-                let sort = sortMap[option] || "date";
-
-                let res = await this.sendAuthRequest(
-                    "GET",
-                    `${this.apiBaseUrl}/search?query=*&sort=${sort}&page=${page || 1}`
+                let res = await Network.get(
+                    `${this.apiBaseUrl}/search?query=${encodeURIComponent("*")}&sort=${encodeURIComponent(sort)}&page=${page || 1}`,
+                    this.getApiBaseHeaders()
                 );
                 if(res.status !== 200){
-                    throw "Invalid Status Code: " + res.status;
+                    throw this.buildApiError(res, "Failed to load ranking");
                 }
                 let data = JSON.parse(res.body);
                 return {
@@ -630,108 +741,59 @@ class Nhentai extends ComicSource {
          * @returns {Promise<{comics: Comic[], maxPage: number}>}
          */
         load: async (category, param, options, page) => {
-            if(param) {
-                switch (param.toLowerCase()) {
-                    case 'tags': param = 'tag'; break;
-                    case 'languages': param = 'language'; break;
-                    case 'artists': param = 'artist'; break;
-                    case 'characters': param = 'character'; break;
-                    case 'parodies': param = 'parody'; break;
-                    case 'groups': param = 'group'; break;
-                    case 'categories': param = 'category'; break;
+            param = this.normalizeTagType(param);
+            let slug = this.slugifyTag(category);
+            let sort = this.normalizeSort(options?.[0]);
+
+            // 优先用 tagged 接口 (与原站 /tag/<slug>/?sort=... 同构, 支持全部 5 种排序)
+            let tagId = await this.resolveTagId(param, slug);
+            if (tagId) {
+                try {
+                    return await this.loadTagCategory(
+                        tagId,
+                        page || 1,
+                        sort
+                    );
+                } catch (e) {
+                    // tagged 失败则继续走 search 兜底, 保留原始错误以便最终抛出
+                    if (page !== 1) throw e;
                 }
             }
 
-            category = category
-                .replaceAll(" ", "-")
-                .replaceAll(".", "-");
-            category = category.toLowerCase();
-
-            let sort = (options?.[0] || "date")
-                .split("-")[0]
-                .replace("/", "")
-                .replace("@", "-");
-            if(!sort){
-                sort = "date";
-            }
-            let tagId = null;
-
-            // 优先使用详情页缓存的真实 id
-            let cacheKey =
-                param + ":" +
-                category.toLowerCase();
-
-            if(
-                this.tagIdCache &&
-                this.tagIdCache[cacheKey] !== undefined
-            ){
-                tagId = this.tagIdCache[cacheKey];
-            }
-
-            // 语言
-            if(!tagId && param === "language") {
-
-                let languageMap = {
-                    chinese: 29963,
-                    english: 12227,
-                    japanese: 6346
-                };
-
-                if(languageMap[category]){
-                    tagId = languageMap[category];
-                }
-            }
-
-            // 如果缓存没有，再查旧静态表
-            if(!tagId) {
-                let searchName =
-                    category
-                    .toLowerCase()
-                    .replace(/\s+/g, "-");
-
-                for (let id in Nhentai.nhentaiTags) {
-
-                    let tagName =
-                        Nhentai.nhentaiTags[id]
-                        .toLowerCase()
-                        .replace(/\s+/g, "-");
-
-                    if(tagName === searchName){
-                        tagId = id;
-                        break;
-                    }
-                }
-            }
-
-            // tag 分类
-            if(tagId){
-
-                return await this.loadTagCategory(
-                    tagId,
-                    page || 1,
-                    sort
-                );
+            // 无 tag_id (新 tag / 社区 tag) 时用 search 接口兜底:
+            // 原站 /search/?q=<type>:<slug>&sort=... 同样支持全部排序
+            try {
+                let query = `${param}:${slug}`;
+                return await this.loadSearchWithSort(query, sort, page || 1);
+            } catch (e) {
+                // search 兜底也失败时保留网页备用 (带 sort, 与原站一致)
             }
 
     // API 找不到时保留网页备用
             let url =
-            `${this.baseUrl}/${param}/${encodeURIComponent(category)}?page=${page}`;
+            `${this.baseUrl}/${encodeURIComponent(param)}/${encodeURIComponent(slug)}?page=${page || 1}&sort=${encodeURIComponent(sort)}`;
             let res = await Network.get(url, this.webHeaders);
+            if (res.status !== 200) {
+                throw "Invalid Status Code: " + res.status;
+            }
             return this.parseComicList(
                 res.body,
-                "category"
+                "category",
+                sort
             );
         },
         // provide options for category comic loading
         optionList: [
             {
+                label: "sort",
                 // For a single option, use `-` to separate the value and text, left for value, right for text
+                // value 不能含 `-` (Venera 按第一个 `-` 切分), 所以用下划线, load 里再 normalize 回连字符
                 options: [
-                    "/-Recent",
-                    "/popular@today-Popular Today",
-                    "/popular@week-Popular Week",
-                    "/popular@month-Popular Month",
-                    "/popular-Popular All",
+                    "date-Recent",
+                    "popular_today-Popular Today",
+                    "popular_week-Popular Week",
+                    "popular_month-Popular Month",
+                    "popular-Popular All",
                 ],
             }
         ],
@@ -747,16 +809,16 @@ class Nhentai extends ComicSource {
          * @returns {Promise<{comics: Comic[], maxPage: number}>}
          */
         load: async (keyword, options, page) => {
-            let sort = options[0] || "date"
+            let sort = this.normalizeSort(options?.[0])
             // 第一页结果缓存 60s (nhentai API 限速 ~1req/2s, 防 429)
             const cacheKey = `${keyword}|${sort}|${page}`
             if (this.searchCache?.key === cacheKey && Date.now() - this.searchCache.time < 60000) {
                 return this.searchCache.data;
             }
-            let url = `${this.apiBaseUrl}/search?query=${encodeURIComponent(keyword)}&page=${page}&sort=${sort}`
+            let url = `${this.apiBaseUrl}/search?query=${encodeURIComponent(keyword)}&page=${page}&sort=${encodeURIComponent(sort)}`
             let res = await Network.get(url, this.getApiBaseHeaders());
             if(res.status !== 200) {
-                throw "Invalid Status Code: " + res.status
+                throw this.buildApiError(res, "Failed to search");
             }
             let result = this.parseComicListFromApi(JSON.parse(res.body))
             this.searchCache = { key: cacheKey, time: Date.now(), data: result };
@@ -767,11 +829,12 @@ class Nhentai extends ComicSource {
         optionList: [
             {
                 // For a single option, use `-` to separate the value and text, left for value, right for text
+                // value 不能含 `-`, 用下划线代替连字符
                 options: [
                     "date-Recent",
-                    "popular-today-Popular Today",
-                    "popular-week-Popular Week",
-                    "popular-month-Popular Month",
+                    "popular_today-Popular Today",
+                    "popular_week-Popular Week",
+                    "popular_month-Popular Month",
                     "popular-Popular All",
                 ],
                 // option label
