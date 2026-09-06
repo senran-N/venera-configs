@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.13"
+    version = "1.0.14"
 
     minAppVersion = "1.0.0"
 
@@ -968,21 +968,27 @@ class Wnacg extends ComicSource {
          */
         loadEp: async (comicId, epId) => {
             comicId = this.extractAid(comicId) || comicId
-            // 首选新阅读器数据源 /photos-item-aid- (mReader.initData page_url, 实测 20/20 全量)
-            //  rightly filtered: 仅 /data/ 原图, 升级 http->https
+            // 首选新阅读器数据源 /photos-item-aid- (mReader.initData page_url, 实测全量)
+            // 仅保留 /data/ 原图, http 升级 https
             try {
                 let itemRes = await Network.get(`${this.baseUrl}/photos-item-aid-${comicId}.html`, this.webHeaders)
                 if (itemRes.status === 200) {
-                    let m = itemRes.body.match(/"page_url"\s*:\s*\[(.*?)\]/s)
+                    let m = itemRes.body.match(/"page_url"[\s\S]*?\[([\s\S]*?)\]/)
                     if (m) {
-                        let urls = [...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1]).filter(u => u.includes("/data/"))
-                        urls = urls.map(u => {
-                            if (u.startsWith("//")) return "https:" + u
-                            return u.replace(/^http:\/\//, "https://")
-                        })
-                        // 去重保序
-                        let seen = new Set()
-                        urls = urls.filter(u => !seen.has(u) && seen.add(u))
+                        let urls = []
+                        let seen0 = new Set()
+                        let qre = /"([^"]+)"/g
+                        let qm = null
+                        while ((qm = qre.exec(m[1])) !== null) {
+                            let u = qm[1]
+                            if (u.indexOf("/data/") < 0) continue
+                            if (u.indexOf("//") === 0) u = "https:" + u
+                            else u = u.replace(/^http:\/\//, "https://")
+                            if (!seen0.has(u)) {
+                                seen0.add(u)
+                                urls.push(u)
+                            }
+                        }
                         if (urls.length > 0) return { images: urls }
                     }
                 }
@@ -991,14 +997,15 @@ class Wnacg extends ComicSource {
             try {
                 let res = await Network.get(`${this.baseUrl}/photos-gallery-aid-${comicId}.html`, this.webHeaders)
                 if (res.status === 200) {
-                    let m = res.body.match(/imglist\s*=\s*\[(.*?)\]/s)
+                    let m = res.body.match(/imglist[\s\S]*?\[([\s\S]*?)\]/)
                     let target = (m && m[1]) || res.body
-                    const regex = RegExp(String.raw`(?:https?:)?//[^"'`\s]+/data/[^"'`\s]+\.(?:jpg|jpeg|png|webp|gif|jpe)`, 'gi');
-                    const seen = new Set()
-                    const images = []
-                    for (let mm of target.matchAll(regex)) {
+                    var regex = /(?:https?:)?\/\/[^"'\s]+\/data\/[^"'\s]+\.(?:jpg|jpeg|png|webp|gif|jpe)/gi;
+                    var seen = new Set()
+                    var images = []
+                    var mm = null
+                    while ((mm = regex.exec(target)) !== null) {
                         let url = mm[0]
-                        if (url.startsWith("//")) url = 'https:' + url
+                        if (url.indexOf("//") === 0) url = 'https:' + url
                         else url = url.replace(/^http:\/\//, "https://")
                         if (!seen.has(url)) {
                             seen.add(url)
