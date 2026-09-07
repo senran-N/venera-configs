@@ -3,7 +3,7 @@ class Picacg extends ComicSource {
 
     key = "picacg"
 
-    version = "1.0.7"
+    version = "1.0.8"
 
     minAppVersion = "1.0.0"
 
@@ -371,7 +371,7 @@ class Picacg extends ComicSource {
                 return await this.loadCollection(category)
             }
             let type = param ?? 'c'
-            let sort = (options && options[0]) ? options[0].split("-")[0] : "dd"
+            let sort = (options && options[0]) ? String(options[0]).split("-")[0] : "dd"
             let base = this.loadSetting('base_url')
             let path = `comics?page=${page}&${type}=${encodeURIComponent(category)}&s=${sort}`
             let res = await Network.get(
@@ -438,11 +438,15 @@ class Picacg extends ComicSource {
     /// 搜索
     search = {
         load: async (keyword, options, page) => {
-            let sort = (options && options[0]) ? options[0].split("-")[0] : "dd"
+            let sort = (options && options[0]) ? String(options[0]).split("-")[0] : "dd"
+            // 多选值在不同 App 版本可能是 JSON 字符串或原生数组, 两种都兼容
+            let rawCats = options ? options[1] : null
             let cats = []
-            if (options && options[1]) {
+            if (Array.isArray(rawCats)) {
+                cats = rawCats
+            } else if (typeof rawCats === "string" && rawCats) {
                 try {
-                    let parsed = JSON.parse(options[1])
+                    let parsed = JSON.parse(rawCats)
                     cats = Array.isArray(parsed) ? parsed : [parsed]
                 } catch (e) {
                     cats = []
@@ -734,17 +738,31 @@ class Picacg extends ComicSource {
         },
         // 加载评论
         loadComments: async (comicId, subId, page, replyTo) => {
+            // _user 可能为 null (用户已注销, 官方客户端同样判空), 单条坏评论不能拖垮整页
             function parseComment(c) {
+                let user = c._user ?? {}
+                let avatar = user.avatar
                 return new Comment({
-                    userName: c._user.name,
-                    avatar: c._user.avatar ? c._user.avatar.fileServer + '/static/' + c._user.avatar.path : undefined,
+                    userName: user.name ?? "Unknown",
+                    avatar: avatar && avatar.fileServer && avatar.path ? avatar.fileServer + '/static/' + avatar.path : undefined,
                     id: c._id,
-                    content: c.content,
+                    content: c.content ?? "",
                     isLiked: c.isLiked,
                     score: c.likesCount ?? 0,
                     replyCount: c.commentsCount,
                     time: c.created_at,
                 })
+            }
+            function parseCommentList(docs) {
+                let out = []
+                for (let c of (docs ?? [])) {
+                    try {
+                        out.push(parseComment(c))
+                    } catch (e) {
+                        // 跳过坏评论
+                    }
+                }
+                return out
             }
             let comments = []
 
@@ -759,10 +777,8 @@ class Picacg extends ComicSource {
                     throw 'Invalid status code: ' + res.status
                 }
                 let data = JSON.parse(res.body)
-                data.data.comments.docs.forEach(c => {
-                    comments.push(parseComment(c))
-                })
-                maxPage = data.data.comments.pages
+                comments = parseCommentList(data.data?.comments?.docs)
+                maxPage = data.data?.comments?.pages ?? 1
             } else {
                 let res = await Network.get(
                     `${this.loadSetting('base_url')}/comics/${comicId}/comments?page=${page}`,
@@ -772,10 +788,8 @@ class Picacg extends ComicSource {
                     throw 'Invalid status code: ' + res.status
                 }
                 let data = JSON.parse(res.body)
-                data.data.comments.docs.forEach(c => {
-                    comments.push(parseComment(c))
-                })
-                maxPage = data.data.comments.pages
+                comments = parseCommentList(data.data?.comments?.docs)
+                maxPage = data.data?.comments?.pages ?? 1
             }
             return {
                 comments: comments,
