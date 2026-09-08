@@ -4,7 +4,7 @@ class ManHuaGui extends ComicSource {
 
   key = "ManHuaGui";
 
-  version = "1.2.3";
+  version = "1.2.4";
 
   minAppVersion = "1.4.0";
 
@@ -138,21 +138,59 @@ class ManHuaGui extends ComicSource {
     });
   }
 
+  // 封面图片域名与id一一对应: cf.mhgui.com/cpic/m/{id}.jpg (实测任意漫画id可用)
+  coverUrl(id) {
+    return `https://cf.mhgui.com/cpic/m/${id}.jpg`;
+  }
+
+  // 解析纯文字排行项 (首页排行/题材排行: <li><em>1</em><h6><a>标题</a><span>[<a>最新章节</a>]</span></h6><small>8.6</small></li>)
+  parseRankLi(li) {
+    let a = li.querySelector("h6 a");
+    if (!a) return null;
+    let m = (a.attributes["href"] || "").match(/\/comic\/(\d+)\//);
+    if (!m) return null;
+    let id = m[1];
+    let rankEl = li.querySelector("em");
+    let rank = rankEl ? rankEl.text.trim() : "";
+    let scoreEl = li.querySelector("small");
+    let score = scoreEl ? scoreEl.text.trim() : "";
+    let latestEl = li.querySelector("h6 span a");
+    let latest = latestEl ? latestEl.text.trim() : "";
+    let desc = rank ? `#${rank}` : "";
+    if (score && !isNaN(parseFloat(score))) desc += ` · ${score}分`;
+    if (latest) desc += ` · ${latest}`;
+    return new Comic({
+      id,
+      title: a.text.trim(),
+      cover: this.coverUrl(id),
+      subTitle: latest,
+      tags: [],
+      description: desc,
+    });
+  }
+
+  // 解析列表页 (/list/...) 漫画项, 含状态/更新时间/评分
   parseComic(e) {
     let simple = this.parseSimpleComic(e);
-    let sl = e.querySelector(".sl");
-    let status = sl ? "连载" : "完结";
-    let tmp = e.querySelector(".updateon").childNodes;
-    let update = tmp[0].replace("更新于：", "").trim();
-    let tags = [status, update];
-
+    if (!simple) return null;
+    let tags = [];
+    if (e.querySelector(".sl")) tags.push("连载");
+    if (e.querySelector(".fd")) tags.push("完结");
+    let updateEl = e.querySelector(".updateon");
+    let score = "";
+    if (updateEl) {
+      let em = updateEl.querySelector("em");
+      score = em ? em.text.trim() : "";
+      let date = (updateEl.text || "").replace("更新于：", "").trim();
+      if (score && date.endsWith(score)) date = date.slice(0, -score.length).trim();
+      if (date) tags.push(date);
+    }
     return new Comic({
       id: simple.id,
       title: simple.title,
       cover: simple.cover,
-      description: simple.description,
+      description: score ? `评分 ${score}` : simple.description,
       tags,
-      author,
     });
   }
   /**
@@ -512,7 +550,7 @@ class ManHuaGui extends ComicSource {
       title: "漫画柜",
       type: "multiPartPage",
       /**
-       * 参考 manhuagui_explore.html，抓取“热门漫画最新更新”与 tab 板块
+       * 首页聚合: 热门更新 / 排行榜(日周月总) / tab板块 / 题材专区
        */
       load: async (page) => {
         let document = await this.getHtml(this.baseUrl);
@@ -532,7 +570,20 @@ class ManHuaGui extends ComicSource {
           }
         }
 
-        // 2. tab 板块（热门连载漫画、经典完结漫画、最新上架漫画、2020新番漫画）
+        // 2. 漫画排行榜: idx-rank (日/周/月/总 四张榜, 每张40名)
+        let rankTabs = document.querySelectorAll("#rankTab a");
+        let rankLists = document.querySelectorAll("#rankCont > ul");
+        for (let i = 0; i < rankLists.length && i < rankTabs.length; i++) {
+          let tabName = rankTabs[i].text.trim();
+          let comics = rankLists[i].querySelectorAll("li")
+            .map(li => this.parseRankLi(li))
+            .filter(c => c);
+          if (comics.length > 0) {
+            parts.push({ title: `${tabName}排行榜`, comics });
+          }
+        }
+
+        // 3. tab 板块（热门连载漫画、经典完结漫画、最新上架漫画、2020新番漫画）
         let tabTitles = document.querySelectorAll("#cmt-tab li");
         let tabParts = document.querySelectorAll("#cmt-cont ul.cover-list");
         for (let i = 0; i < tabTitles.length; i++) {
@@ -543,9 +594,55 @@ class ManHuaGui extends ComicSource {
           }
         }
 
+        // 4. 题材专区 (idx-sc: 推理/恐怖/悬疑 等, 每块分"热门连载/经典完结"两榜)
+        let scBlocks = document.querySelectorAll(".idx-sc-cont");
+        for (let block of scBlocks) {
+          let h4 = block.querySelector("h4");
+          let blockTitle = h4 ? h4.text.trim().replace(/[\/\s]+$/, "") : "题材";
+          let tabNames = block.querySelectorAll(".idx-sc-bar li").map(li => li.text.trim());
+          let tabLists = block.querySelectorAll(".idx-sc-list > ul");
+          for (let i = 0; i < tabLists.length; i++) {
+            let comics = tabLists[i].querySelectorAll("li")
+              .map(li => this.parseRankLi(li))
+              .filter(c => c);
+            if (comics.length > 0) {
+              let label = tabNames[i] || "";
+              parts.push({ title: `${blockTitle.split("/")[0]}·${label}`, comics });
+            }
+          }
+        }
+
         return parts;
       },
       loadNext(next) {},
+    },
+    {
+      title: "每日更新",
+      type: "singlePageWithMultiPart",
+      /**
+       * /update/ 页面: 最近7天更新按日期分组 (每组最多取60部)
+       */
+      load: async (page) => {
+        let document = await this.getHtml(`${this.baseUrl}/update/`);
+        let result = {};
+        // 结构: 一个 .latest-cont 内含多组 <h5>日期</h5><div class="latest-list">
+        let lists = document.querySelectorAll(".latest-list");
+        for (let list of lists) {
+          let h5 = list.previousElementSibling;
+          let strong = h5 && h5.localName === "h5" ? h5.querySelector("strong") : null;
+          if (!strong) continue;
+          let date = strong.text.trim().split(" ").filter(Boolean)[0] || "更新";
+          let lis = list.querySelectorAll("li");
+          let comics = [];
+          for (let li of lis) {
+            if (comics.length >= 60) break;
+            let c = this.parseSimpleComic(li);
+            if (c) comics.push(c);
+          }
+          if (comics.length > 0) result[date] = comics;
+        }
+        return result;
+      },
     },
   ];
 
@@ -643,7 +740,7 @@ class ManHuaGui extends ComicSource {
       },
     ],
     // enable ranking page
-    enableRankingPage: false,
+    enableRankingPage: true,
   };
 
   /// category comic loading related
@@ -718,8 +815,9 @@ class ManHuaGui extends ComicSource {
     ],
     ranking: {
       // 对于单个选项，使用“-”分隔值和文本，左侧为值，右侧为文本
+      // 注意: 空值会拼出 /list/_p1.html (404), 默认也必须给具体值
       options: [
-        "-最新发布",
+        "index-最新发布",
         "update-最新更新",
         "view-人气最旺",
         "rate-评分最高",
@@ -731,16 +829,21 @@ class ManHuaGui extends ComicSource {
        * @returns {Promise<{comics: Comic[], maxPage: number}>}
        */
       load: async (option, page) => {
-        let url = `${this.baseUrl}/list/${option}_p${page}.html`;
+        let sort = option || "index";
+        let url = `${this.baseUrl}/list/${sort}_p${page}.html`;
         let document = await this.getHtml(url);
-        let maxPage = document
-          .querySelector(".result-count")
-          .querySelectorAll("strong")[1].text;
-        maxPage = parseInt(maxPage);
+        let maxPageEl = document.querySelector(".result-count");
+        let maxPage = 1;
+        if (maxPageEl) {
+          let strongs = maxPageEl.querySelectorAll("strong");
+          if (strongs.length > 1) {
+            maxPage = parseInt(strongs[1].text) || 1;
+          }
+        }
         let comics = document
-          .querySelector("#contList")
-          .querySelectorAll("li")
-          .map((e) => this.parseComic(e));
+          .querySelectorAll("#contList > li")
+          .map((e) => this.parseComic(e))
+          .filter((c) => c !== null);
         return {
           comics,
           maxPage,
