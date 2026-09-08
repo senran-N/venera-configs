@@ -17,7 +17,7 @@ class Wnacg extends ComicSource {
     // unique id of the source
     key = "wnacg"
 
-    version = "1.0.14"
+    version = "1.1.0"
 
     minAppVersion = "1.0.0"
 
@@ -257,10 +257,62 @@ class Wnacg extends ComicSource {
         return String(s).replace(/<[^>]*>/g, "").trim()
     }
 
+    // 统一 GET 一个页面并解析为 HtmlDocument; 非 200 抛错 (调用方负责 dispose)
+    async fetchDocument(url) {
+        let res = await Network.get(url, this.webHeaders)
+        if (res.status !== 200) {
+            throw `Invalid Status Code ${res.status}`
+        }
+        return new HtmlDocument(res.body)
+    }
+
+    // 统一分页解析: 取 paginator 内最后一个纯数字链接, 无则为 1
+    // 适配 div.f_left.paginator (列表页/收藏/详情缩略图)
+    parseMaxPage(document) {
+        let paginators = document.querySelectorAll("div.f_left.paginator")
+        for (let p of paginators) {
+            let links = p.querySelectorAll("a")
+            for (let i = links.length - 1; i >= 0; i--) {
+                let n = Number((links[i].text || "").trim())
+                if (!Number.isNaN(n) && n > 1) {
+                    return n
+                }
+            }
+        }
+        return 1
+    }
+
     extractAid(href) {
         if (!href) return null
         let m = RegExp("(?<=-aid-)[0-9]+").exec(href)
         return m ? m[0] : null
+    }
+
+    // 头像等站点资源 URL 归一化: 协议相对补 https, 相对路径补 baseUrl
+    normalizeAbsoluteUrl(src) {
+        if (!src) return ""
+        src = String(src).trim()
+        if (src.startsWith("http")) return src
+        if (src.startsWith("//")) return "https:" + src
+        return this.baseUrl + (src.startsWith("/") ? src : "/" + src)
+    }
+
+    // 从阅读器页 JS 里收集 /data/ 大图: 去重, 协议相对/http 统一升级为 https
+    extractImageUrls(body) {
+        let regex = /(?:https?:)?\/\/[^"'\s]+\/data\/[^"'\s]+\.(?:jpg|jpeg|png|webp|gif|jpe)/gi
+        let seen = new Set()
+        let urls = []
+        let m = null
+        while ((m = regex.exec(body)) !== null) {
+            let url = m[0]
+            if (url.indexOf("//") === 0) url = "https:" + url
+            else url = url.replace(/^http:\/\//, "https://")
+            if (!seen.has(url)) {
+                seen.add(url)
+                urls.push(url)
+            }
+        }
+        return urls
     }
 
     // 分类/标签/更新列表共用解析 (原站 MeiuPic 2.2.0 通用结构)
@@ -275,19 +327,7 @@ class Wnacg extends ComicSource {
                 comics.push(this.parseComic(comicElement))
             } catch (e) { /* 跳过损坏条目 */ }
         }
-        // 分页: 取 paginator 内最后一个纯数字链接, 无则为 1
-        let pages = 1
-        let pagesLink = document.querySelectorAll("div.f_left.paginator > a")
-        if (pagesLink.length > 0) {
-            for (let i = pagesLink.length - 1; i >= 0; i--) {
-                let n = Number((pagesLink[i].text || "").trim())
-                if (!Number.isNaN(n) && n > 0) {
-                    pages = n
-                    break
-                }
-            }
-        }
-        return { comics, maxPage: pages }
+        return { comics, maxPage: this.parseMaxPage(document) }
     }
 
     // 统一构建分类 URL (原站规律, 实测):
@@ -351,11 +391,7 @@ class Wnacg extends ComicSource {
              * - for `mixed` type, use param `page` as index. for each index(0-based), return {data: [], maxPage: number?}, data is an array contains Comic[] or {title: string, comics: Comic[], viewMore: string?}
              */
             load: async (page) => {
-                let res = await Network.get(this.baseUrl, this.webHeaders)
-                if (res.status !== 200) {
-                    throw `Invalid Status Code ${res.status}`
-                }
-                let document = new HtmlDocument(res.body)
+                let document = await this.fetchDocument(this.baseUrl)
                 // 最近主题 (weitu) 会在多个区块上重复输出 class 属性 (如 "class=\"title_sort\" class=\"cc\"")，
                 // 部分 HTML 解析器会丢弃重复属性导致 bodywrap 丢失，因此这里不再强依赖 bodywrap 配对数。
                 let titleBlocks = document.querySelectorAll("div.title_sort");
@@ -365,9 +401,15 @@ class Wnacg extends ComicSource {
                     comicBlocks = document.querySelectorAll("div.grid");
                 }
                 let result = []
+                // 广告会注入额外的 title_sort/不带 title_h2 的块, 只有两者数量一致时才按索引配对,
+                // 否则放弃逐块解析, 走全局兜底, 避免标题与漫画错位
+                if (titleBlocks.length !== comicBlocks.length) {
+                    titleBlocks = []
+                }
                 for (let i = 0; i < titleBlocks.length; i++) {
                     let titleEl = titleBlocks[i].querySelector("div.title_h2")
-                    let title = titleEl ? titleEl.text.replaceAll(/\s+/g, '') : `Section ${i + 1}`
+                    if (!titleEl) continue
+                    let title = titleEl.text.replaceAll(/\s+/g, '')
                     let linkEl = titleBlocks[i].querySelector("div.r > a")
                     let link = linkEl ? linkEl.attributes["href"] : "/albums.html"
                     let comics = []
@@ -611,12 +653,7 @@ class Wnacg extends ComicSource {
             // param 为分类 path (如 /albums-index-cate-5.html 或 /albums-index-tag-XXX.html),
             // explore 的 viewMore 会传 category:title@param 格式, 这里 param 已是解析后的 path
             let url = this.buildCategoryUrl(param, page)
-
-            let res = await Network.get(url, this.webHeaders)
-            if (res.status !== 200) {
-                throw `Invalid Status Code ${res.status}`
-            }
-            let document = new HtmlDocument(res.body)
+            let document = await this.fetchDocument(url)
             let { comics, maxPage } = this.parseListPage(document)
             document.dispose()
             return {
@@ -633,13 +670,7 @@ class Wnacg extends ComicSource {
             ],
             load: async (option, page) => {
                 let url = this.buildRankingUrl(option, page)
-
-                let res = await Network.get(url, this.webHeaders)
-                if (res.status !== 200) {
-                    throw `Invalid Status Code ${res.status}`
-                }
-
-                let document = new HtmlDocument(res.body)
+                let document = await this.fetchDocument(url)
                 let { comics, maxPage } = this.parseListPage(document)
 
                 document.dispose()
@@ -671,20 +702,20 @@ class Wnacg extends ComicSource {
             if (page && page > 1) {
                 url += `&p=${page}`
             }
-            let res = await Network.get(url, this.webHeaders)
-            if (res.status !== 200) {
-                throw `Invalid Status Code ${res.status}`
-            }
-            let document = new HtmlDocument(res.body)
+            let document = await this.fetchDocument(url)
             let { comics, maxPage } = this.parseListPage(document)
-            // 搜索页有精确总数 p.result>b (首个为过滤命中数, 24条/页), 优先用它算 maxPage
-            let total = document.querySelectorAll("p.result > b")
-            const comicsPerPage = 24
-            if (total.length > 0) {
-                let n = Number((total[0].text || "").replaceAll(',', ''))
+            // 搜索页有精确总数 (大約有<b>N</b>項符合查詢結果), 用它算 maxPage (24条/页)
+            // 注意页面上另有一个同 class 的域名公告 p.result, 需按文本特征过滤
+            for (let p of document.querySelectorAll("p.result")) {
+                let text = p.text || ""
+                if (!text.includes("符合查詢結果") && !text.includes("符合")) continue
+                let b = p.querySelector("b")
+                if (!b) continue
+                let n = Number((b.text || "").replaceAll(',', ''))
                 if (!Number.isNaN(n) && n > 0) {
-                    maxPage = Math.max(1, Math.ceil(n / comicsPerPage))
+                    maxPage = Math.max(1, Math.ceil(n / 24))
                 }
+                break
             }
             document.dispose()
             return {
@@ -819,9 +850,11 @@ class Wnacg extends ComicSource {
                 let link = comic.querySelector("div.box_cel.u_listcon > p.l_title > a").attributes["href"];
                 let id = this.extractAid(link);
                 let info = comic.querySelector("div.box_cel.u_listcon > p.l_detla").text;
-                let pages = Number(RegExp("(?<=頁數：)[0-9]+").exec(info)[0])
-                let delUrl = comic.querySelector("div.box_cel.u_listcon > p.alopt > a").attributes["onclick"];
-                let favoriteId = RegExp("(?<=del-id-)[0-9]+").exec(delUrl)[0];
+                let pagesMatch = /頁數：(\d+)/.exec(info || "")
+                let pages = pagesMatch ? Number(pagesMatch[1]) : 0
+                let delUrl = comic.querySelector("div.box_cel.u_listcon > p.alopt > a").attributes["onclick"] || "";
+                let favMatch = /del-id-(\d+)/.exec(delUrl)
+                let favoriteId = favMatch ? favMatch[1] : ""
                 return new Comic({
                     id: id,
                     title: name,
@@ -831,21 +864,11 @@ class Wnacg extends ComicSource {
                     favoriteId: favoriteId,
                 })
             })
-            let pages = 1
-            let pagesLink = document.querySelectorAll("div.f_left.paginator > a")
-            if (pagesLink.length > 0) {
-                for (let i = pagesLink.length - 1; i >= 0; i--) {
-                    let n = Number((pagesLink[i].text || "").trim())
-                    if (!Number.isNaN(n) && n > 0) {
-                        pages = n
-                        break
-                    }
-                }
-            }
+            let maxPage = this.parseMaxPage(document)
             document.dispose()
             return {
                 comics: comics,
-                maxPage: pages,
+                maxPage: maxPage,
             }
         }
     }
@@ -859,27 +882,26 @@ class Wnacg extends ComicSource {
          */
         loadInfo: async (id) => {
             id = this.extractAid(id) || id
-            let res = await Network.get(`${this.baseUrl}/photos-index-aid-${id}.html`, this.webHeaders)
-            if (res.status !== 200) {
-                throw `Invalid Status Code ${res.status}`
-            }
-            let document = new HtmlDocument(res.body)
+            let document = await this.fetchDocument(`${this.baseUrl}/photos-index-aid-${id}.html`)
             let title = this.stripHtml(document.querySelector("div.userwrap > h2").text)
-            let cover = this.normalizeImageUrl(document.querySelector("div.userwrap > div.asTB > div.asTBcell.uwthumb > img").attributes["src"])
-            let labels = document.querySelectorAll("div.asTBcell.uwconn > label")
-            let category = labels[0].text.split("：")[1]
-            let pagesRaw = labels[1].text.split("：")[1];
-            let pagesNum = parseInt((pagesRaw || "").replace(/[^0-9]/g, "")) || 0
+            let coverEl = document.querySelector("div.userwrap div.asTBcell.uwthumb > img")
+            let cover = this.normalizeImageUrl(coverEl ? coverEl.attributes["src"] : "")
+            let infoBox = document.querySelector("div.asTBcell.uwconn")
+            let labels = infoBox ? infoBox.querySelectorAll("label") : []
+            let category = labels.length > 0 ? (labels[0].text.split("：")[1] || "").trim() : ""
+            let pagesRaw = labels.length > 1 ? (labels[1].text.split("：")[1] || "").trim() : ""
+            let pagesNum = parseInt(pagesRaw.replace(/[^0-9]/g, "")) || 0
             let tagsDom = document.querySelectorAll("a.tagshow");
             let tags = new Map()
-            tags.set("頁數", [pagesRaw])
-            tags.set("分類", [category])
+            if (pagesRaw) tags.set("頁數", [pagesRaw])
+            if (category) tags.set("分類", [category])
             if (tagsDom.length > 0) {
                 tags.set("標籤", tagsDom.map((e) => this.stripHtml(e.text)))
             }
-            let description = document.querySelector("div.asTBcell.uwconn > p").text;
-            if (description) description = description.replace(/^簡介：/, "").trim()
-            let uploader = document.querySelector("div.asTBcell.uwuinfo > a > p").text;
+            let descEl = infoBox ? infoBox.querySelector("p") : null
+            let description = descEl ? descEl.text.replace(/^簡介：/, "").trim() : ""
+            let uploaderEl = document.querySelector("div.asTBcell.uwuinfo > a > p")
+            let uploader = uploaderEl ? uploaderEl.text : ""
 
             // wnacg 页面没有独立"作者"字段, 作者/社团名约定写在标题首对 [] 里 (如 [加濑大辉] ...)。
             // 必须提取出来填入 subtitle + 作者标签, 否则 App 会用 uploader 顶替作者位显示。
@@ -892,6 +914,7 @@ class Wnacg extends ComicSource {
                 tags.set("作者", [authorName])
             }
 
+            document.dispose()
             return new ComicDetails({
                 id: String(id),
                 title: title,
@@ -914,50 +937,26 @@ class Wnacg extends ComicSource {
          */
         loadThumbnails: async (id, next) => {
             id = this.extractAid(id) || id
-            next = next || '1'
-            let res = await Network.get(`${this.baseUrl}/photos-index-page-${next}-aid-${id}.html`, this.webHeaders);
-            if (res.status !== 200) {
-                throw `Invalid Status Code ${res.status}`
-            }
-            let document = new HtmlDocument(res.body)
+            let page = Number(next) || 1
+            let document = await this.fetchDocument(`${this.baseUrl}/photos-index-page-${page}-aid-${id}.html`)
             let thumbnails = document.querySelectorAll("div.pic_box.tb > a > img").map((e) => {
                 return this.normalizeImageUrl(e.attributes["src"])
             })
-            next = (Number(next) + 1).toString()
+            // 分页器中存在指向下一页 (page+1) 的链接时才继续, 否则为末页
+            let hasNext = false
             let paginator = document.querySelector("div.f_left.paginator")
             if (paginator) {
-                // 最后一页时最后一个子节点为 span.thispage (无后继 <a>), 否则还有下一页
-                let pagesLink = paginator.querySelectorAll("a")
-                let thisPage = paginator.querySelector("span.thispage")
-                if (pagesLink.length === 0) {
-                    next = null
-                } else if (thisPage) {
-                    // 若 thispage 后无 <a>, 说明已是末页
-                    let children = paginator.children || []
-                    let idx = -1
-                    for (let i = 0; i < children.length; i++) {
-                        if ((children[i].text || "").trim() === (thisPage.text || "").trim()) {
-                            idx = i
-                            break
-                        }
+                for (let a of paginator.querySelectorAll("a")) {
+                    if (Number((a.text || "").trim()) === page + 1) {
+                        hasNext = true
+                        break
                     }
-                    let hasNext = false
-                    for (let i = idx + 1; i < children.length; i++) {
-                        if (children[i].localName === "a" || (children[i].querySelector && children[i].querySelector("a"))) {
-                            hasNext = true
-                            break
-                        }
-                    }
-                    if (!hasNext) next = null
                 }
-            } else {
-                // 无分页器说明只有一页
-                next = null
             }
             document.dispose()
             return {
                 thumbnails: thumbnails,
-                next: next
+                next: hasNext ? (page + 1).toString() : null
             }
         },
         /**
@@ -969,52 +968,15 @@ class Wnacg extends ComicSource {
         loadEp: async (comicId, epId) => {
             comicId = this.extractAid(comicId) || comicId
             // 首选新阅读器数据源 /photos-item-aid- (mReader.initData page_url, 实测全量)
-            // 仅保留 /data/ 原图, http 升级 https
-            try {
-                let itemRes = await Network.get(`${this.baseUrl}/photos-item-aid-${comicId}.html`, this.webHeaders)
-                if (itemRes.status === 200) {
-                    let m = itemRes.body.match(/"page_url"[\s\S]*?\[([\s\S]*?)\]/)
-                    if (m) {
-                        let urls = []
-                        let seen0 = new Set()
-                        let qre = /"([^"]+)"/g
-                        let qm = null
-                        while ((qm = qre.exec(m[1])) !== null) {
-                            let u = qm[1]
-                            if (u.indexOf("/data/") < 0) continue
-                            if (u.indexOf("//") === 0) u = "https:" + u
-                            else u = u.replace(/^http:\/\//, "https://")
-                            if (!seen0.has(u)) {
-                                seen0.add(u)
-                                urls.push(u)
-                            }
-                        }
-                        if (urls.length > 0) return { images: urls }
-                    }
-                }
-            } catch (e) { /* 降级到旧 gallery */ }
-            // 旧阅读器数据源 /photos-gallery-aid- (var imglist, 可能为空 document.writeln)
-            try {
-                let res = await Network.get(`${this.baseUrl}/photos-gallery-aid-${comicId}.html`, this.webHeaders)
-                if (res.status === 200) {
-                    let m = res.body.match(/imglist[\s\S]*?\[([\s\S]*?)\]/)
-                    let target = (m && m[1]) || res.body
-                    var regex = /(?:https?:)?\/\/[^"'\s]+\/data\/[^"'\s]+\.(?:jpg|jpeg|png|webp|gif|jpe)/gi;
-                    var seen = new Set()
-                    var images = []
-                    var mm = null
-                    while ((mm = regex.exec(target)) !== null) {
-                        let url = mm[0]
-                        if (url.indexOf("//") === 0) url = 'https:' + url
-                        else url = url.replace(/^http:\/\//, "https://")
-                        if (!seen.has(url)) {
-                            seen.add(url)
-                            images.push(url)
-                        }
-                    }
+            // 降级旧阅读器 /photos-gallery-aid- (var imglist, 可能为空 document.writeln)
+            for (let path of ["photos-item-aid-", "photos-gallery-aid-"]) {
+                try {
+                    let res = await Network.get(`${this.baseUrl}/${path}${comicId}.html`, this.webHeaders)
+                    if (res.status !== 200) continue
+                    let images = this.extractImageUrls(res.body)
                     if (images.length > 0) return { images: images }
-                }
-            } catch (e) { /* 继续抛错 */ }
+                } catch (e) { /* 尝试下一个数据源 */ }
+            }
             throw `Invalid Status Code: no images found`
         },
         /**
@@ -1070,37 +1032,20 @@ class Wnacg extends ComicSource {
          */
         loadComments: async (comicId, subId, page, replyTo) => {
             comicId = this.extractAid(comicId) || comicId
-            let res = await Network.get(`${this.baseUrl}/comment-index-aid-${comicId}.html`, this.webHeaders)
-            if (res.status !== 200) {
-                throw `Invalid Status Code ${res.status}`
-            }
-            let document = new HtmlDocument(res.body)
+            let document = await this.fetchDocument(`${this.baseUrl}/comment-index-aid-${comicId}.html`)
             let items = document.querySelectorAll("div.plItem")
-            if (items.length === 0) {
+            let isFallback = items.length === 0
+            if (isFallback) {
                 // 详情页内联评论兜底 (div.pl_pv)
                 items = document.querySelectorAll("div.pl_pv")
-                let comments = items.map((it) => {
-                    let userName = it.querySelector(".pl_pv_n")?.text?.trim() || ""
-                    let content = it.querySelector(".pl_pv_c")?.text?.trim() || ""
-                    let time = it.querySelector(".pl_pv_m")?.text?.trim() || ""
-                    let avatar = it.querySelector("img")?.attributes?.["src"] || ""
-                    if (avatar && !avatar.startsWith("http")) {
-                        avatar = avatar.startsWith("//") ? "https:" + avatar : this.baseUrl + (avatar.startsWith("/") ? avatar : "/" + avatar)
-                    }
-                    return new Comment({ userName, avatar, content, time })
-                }).filter(c => c.content)
-                document.dispose()
-                return { comments, maxPage: 1 }
             }
             let comments = items.map((it) => {
                 let userName = it.querySelector(".plName")?.text?.trim() || it.querySelector(".pl_pv_n")?.text?.trim() || ""
                 let content = it.querySelector(".plText")?.text?.trim() || it.querySelector(".pl_pv_c")?.text?.trim() || ""
                 let time = it.querySelector(".plTime")?.text?.trim() || it.querySelector(".pl_pv_m")?.text?.trim() || ""
-                let avatar = it.querySelector("img.plAv")?.attributes?.["src"] || it.querySelector("img")?.attributes?.["src"] || ""
-                if (avatar && !avatar.startsWith("http")) {
-                    avatar = avatar.startsWith("//") ? "https:" + avatar : this.baseUrl + (avatar.startsWith("/") ? avatar : "/" + avatar)
-                }
-                let id = it.attributes?.["data-id"] || undefined
+                let avatarEl = it.querySelector("img.plAv") || it.querySelector("img")
+                let avatar = this.normalizeAbsoluteUrl(avatarEl ? avatarEl.attributes["src"] : "")
+                let id = isFallback ? undefined : (it.attributes?.["data-id"] || undefined)
                 return new Comment({ userName, avatar, content, time, id })
             }).filter(c => c.content)
             document.dispose()

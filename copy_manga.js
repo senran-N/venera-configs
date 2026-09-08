@@ -4,7 +4,7 @@ class CopyManga extends ComicSource {
 
     key = "copy_manga"
 
-    version = "1.4.4"
+    version = "1.4.5"
 
     minAppVersion = "1.6.0"
 
@@ -88,6 +88,15 @@ class CopyManga extends ComicSource {
 
     static defaultApiUrl = 'api.copy2000.online'
 
+    // 实测可用的备用 API 域名 (2026-09 探测): 主域名被 IP 封禁 (code 210
+    // "破解版本"提示) 时, 这些镜像仍能正常响应, 用于自动故障转移
+    static fallbackApiHosts = [
+        'api.copy-manga.com',
+        'api.mangacopy.com',
+        'api.copymanga.fun',
+        'api.copy4000.com',
+    ]
+
     static searchApi = "/api/kb/web/searchci/comics"
 
     get deviceinfo() {
@@ -163,12 +172,94 @@ class CopyManga extends ComicSource {
     }
 
     get apiUrl() {
-        let host = this.loadSetting('base_url') || CopyManga.defaultApiUrl;
-        // refreshAppApi 探测到的存活域名；仅在用户未手动修改 API 地址时生效
-        if (this._discoveredApiUrl && host === CopyManga.defaultApiUrl) {
-            host = this._discoveredApiUrl;
+        return `https://${this.apiCandidates[0]}`;
+    }
+
+    /**
+     * 按优先级排列的 API 域名候选列表。
+     * 用户手动改过 API 地址时只使用该地址；否则按
+     * "上次成功的域名 > refreshAppApi 发现的域名 > 默认 > 备用镜像" 排列。
+     */
+    get apiCandidates() {
+        let userHost = this.loadSetting('base_url') || CopyManga.defaultApiUrl;
+        if (userHost !== CopyManga.defaultApiUrl) {
+            return [userHost];
         }
-        return `https://${host}`;
+        let list = [CopyManga.defaultApiUrl];
+        if (this._discoveredApiUrl && !list.includes(this._discoveredApiUrl)) {
+            list.unshift(this._discoveredApiUrl);
+        }
+        for (let h of CopyManga.fallbackApiHosts) {
+            if (!list.includes(h)) {
+                list.push(h);
+            }
+        }
+        let active = this._activeApiHost || this.loadData('active_api_host');
+        if (active && list.includes(active)) {
+            list = [active, ...list.filter(h => h !== active)];
+        }
+        return list;
+    }
+
+    _rememberActiveHost(host) {
+        if (this._activeApiHost === host) {
+            return;
+        }
+        this._activeApiHost = host;
+        try {
+            this.saveData('active_api_host', host);
+        } catch (e) {
+        }
+    }
+
+    /**
+     * GET 请求 API，自动在候选域名间故障转移。
+     * 210 (限流/IP封禁)、403、5xx 及网络异常时换下一个域名重试，
+     * 全部失败则返回最后一次响应，交由调用方按原逻辑报错。
+     */
+    async apiGet(path) {
+        let lastRes = null;
+        for (let host of this.apiCandidates) {
+            let res;
+            try {
+                res = await Network.get(`https://${host}${path}`, this.headers);
+            } catch (e) {
+                continue;
+            }
+            if (res.status === 210 || res.status === 403 || res.status >= 500) {
+                lastRes = res;
+                continue;
+            }
+            if (res.status === 200) {
+                this._rememberActiveHost(host);
+            }
+            return res;
+        }
+        return lastRes;
+    }
+
+    /**
+     * POST 请求 API，故障转移策略同 apiGet。
+     */
+    async apiPost(path, headers, body) {
+        let lastRes = null;
+        for (let host of this.apiCandidates) {
+            let res;
+            try {
+                res = await Network.post(`https://${host}${path}`, headers, body);
+            } catch (e) {
+                continue;
+            }
+            if (res.status === 210 || res.status === 403 || res.status >= 500) {
+                lastRes = res;
+                continue;
+            }
+            if (res.status === 200) {
+                this._rememberActiveHost(host);
+            }
+            return res;
+        }
+        return lastRes;
     }
 
     get copyRegion() {
@@ -229,8 +320,8 @@ class CopyManga extends ComicSource {
         login: async (account, pwd) => {
             let salt = randomInt(1000, 9999)
             let base64 = Convert.encodeBase64(Convert.encodeUtf8(`${pwd}-${salt}`))
-            let res = await Network.post(
-                `${this.apiUrl}/api/v3/login`,
+            let res = await this.apiPost(
+                `/api/v3/login`,
                 {
                     ...this.headers,
                     "Content-Type": "application/x-www-form-urlencoded;charset=utf-8"
@@ -267,10 +358,7 @@ class CopyManga extends ComicSource {
             title: "拷贝漫画",
             type: "singlePageWithMultiPart",
             load: async () => {
-                let dataStr = await Network.get(
-                    `${this.apiUrl}/api/v3/h5/homeIndex`,
-                    this.headers
-                )
+                let dataStr = await this.apiGet(`/api/v3/h5/homeIndex`)
 
                 if (dataStr.status !== 200) {
                     throw `Invalid status code: ${dataStr.status}`
@@ -378,10 +466,10 @@ class CopyManga extends ComicSource {
 
     categoryComics = {
         load: async (category, param, options, page) => {
-            let category_url;
+            let category_path;
             // 分类-排行
             if (category === "排行" || param === "ranking") {
-                category_url = `${this.apiUrl}/api/v3/ranks?limit=30&offset=${(page - 1) * 30}&_update=true&type=1&audience_type=${options[0]}&date_type=${options[1]}`
+                category_path = `/api/v3/ranks?limit=30&offset=${(page - 1) * 30}&_update=true&type=1&audience_type=${options[0]}&date_type=${options[1]}`
             } else {
                 // 分类-主题
                 if (category !== undefined && category !== null) {
@@ -389,14 +477,11 @@ class CopyManga extends ComicSource {
                     param = CopyManga.category_param_dict[category] || "";
                 }
                 options = options.map(e => e.replace("*", "-"))
-                category_url = `${this.apiUrl}/api/v3/comics?limit=30&offset=${(page - 1) * 30}&ordering=${options[1]}&theme=${param}&top=${options[0]}`
+                category_path = `/api/v3/comics?limit=30&offset=${(page - 1) * 30}&ordering=${options[1]}&theme=${param}&top=${options[0]}`
             }
 
 
-            let res = await Network.get(
-                category_url,
-                this.headers
-            )
+            let res = await this.apiGet(category_path)
             if (res.status !== 200) {
                 throw `Invalid status code: ${res.status}`
             }
@@ -520,9 +605,8 @@ class CopyManga extends ComicSource {
             // 优先走详情页缓存下来的作者 path_word，可以精确命中作者
             if (author && this.author_path_word_dict && this.author_path_word_dict.has(author)) {
                 let path_word = encodeURIComponent(this.author_path_word_dict.get(author));
-                res = await Network.get(
-                    `${this.apiUrl}/api/v3/comics?limit=30&offset=${(page - 1) * 30}&ordering=-datetime_updated&author=${path_word}`,
-                    this.headers
+                res = await this.apiGet(
+                    `/api/v3/comics?limit=30&offset=${(page - 1) * 30}&ordering=-datetime_updated&author=${path_word}`,
                 )
             }
             // 一般的搜索情况；手动输入"作者:xxx"时退化为作者搜索
@@ -531,12 +615,11 @@ class CopyManga extends ComicSource {
                     q_type = "author";
                 }
                 let encodedKeyword = encodeURIComponent(keyword)
-                let search_url = this.loadSetting('search_api') === "webAPI"
-                    ? `${this.apiUrl}${CopyManga.searchApi}`
-                    : `${this.apiUrl}/api/v3/search/comic`
-                res = await Network.get(
-                    `${search_url}?limit=30&offset=${(page - 1) * 30}&q=${encodedKeyword}&q_type=${q_type}`,
-                    this.headers
+                let search_path = this.loadSetting('search_api') === "webAPI"
+                    ? CopyManga.searchApi
+                    : `/api/v3/search/comic`
+                res = await this.apiGet(
+                    `${search_path}?limit=30&offset=${(page - 1) * 30}&q=${encodedKeyword}&q_type=${q_type}`,
                 )
             }
             if (res.status !== 200) {
@@ -573,16 +656,15 @@ class CopyManga extends ComicSource {
                 throw "Login expired"
             }
             let reqId = await this.getReqID();
-            let comicData = await Network.get(
-                `${this.apiUrl}/api/v3/comic2/${comicId}?in_mainland=true&request_id=${reqId}&platform=3`,
-                this.headers
+            let comicData = await this.apiGet(
+                `/api/v3/comic2/${comicId}?in_mainland=true&request_id=${reqId}&platform=3`
             )
             if (comicData.status !== 200) {
                 throw `Invalid status code: ${comicData.status}`
             }
             let comic_id = JSON.parse(comicData.body).results.comic.uuid
-            let res = await Network.post(
-                `${this.apiUrl}/api/v3/member/collect/comic`,
+            let res = await this.apiPost(
+                `/api/v3/member/collect/comic`,
                 {
                     ...this.headers,
                     "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
@@ -599,9 +681,8 @@ class CopyManga extends ComicSource {
         },
         loadComics: async (page, folder) => {
             let ordering = this.loadSetting('favorites_ordering') || '-datetime_updated';
-            var res = await Network.get(
-                `${this.apiUrl}/api/v3/member/collect/comics?limit=30&offset=${(page - 1) * 30}&free_type=1&ordering=${ordering}`,
-                this.headers
+            var res = await this.apiGet(
+                `/api/v3/member/collect/comics?limit=30&offset=${(page - 1) * 30}&free_type=1&ordering=${ordering}`
             )
 
             if (res.status === 401) {
@@ -626,8 +707,8 @@ class CopyManga extends ComicSource {
             let getChapters = async (id, groups) => {
                 let fetchSingle = async (id, path) => {
                     let reqId = await this.getReqID();
-                    let chapterUrl = (offset) => `${this.apiUrl}/api/v3/comic/${id}/group/${path}/chapters?limit=100&offset=${offset}&in_mainland=true&request_id=${reqId}`;
-                    let res = await Network.get(chapterUrl(0), this.headers);
+                    let chapterPath = (offset) => `/api/v3/comic/${id}/group/${path}/chapters?limit=100&offset=${offset}&in_mainland=true&request_id=${reqId}`;
+                    let res = await this.apiGet(chapterPath(0));
                     if (res.status !== 200) {
                         throw `Invalid status code: ${res.status}`;
                     }
@@ -640,7 +721,7 @@ class CopyManga extends ComicSource {
                     if (maxChapter > 100) {
                         let offset = 100;
                         while (offset < maxChapter) {
-                            res = await Network.get(chapterUrl(offset), this.headers);
+                            res = await this.apiGet(chapterPath(offset));
                             if (res.status !== 200) {
                                 throw `Invalid status code: ${res.status}`;
                             }
@@ -686,7 +767,7 @@ class CopyManga extends ComicSource {
                     return false;
                 }
                 try {
-                    let res = await Network.get(`${this.apiUrl}/api/v3/comic2/${id}/query`, this.headers);
+                    let res = await this.apiGet(`/api/v3/comic2/${id}/query`);
                     if (res.status !== 200) {
                         return false;
                     }
@@ -697,9 +778,8 @@ class CopyManga extends ComicSource {
             }
             let reqId = await this.getReqID();
             let results = await Promise.all([
-                Network.get(
-                    `${this.apiUrl}/api/v3/comic2/${id}?in_mainland=true&request_id=${reqId}&platform=3`,
-                    this.headers
+                this.apiGet(
+                    `/api/v3/comic2/${id}?in_mainland=true&request_id=${reqId}&platform=3`
                 ),
                 getFavoriteStatus.bind(this)(id)
             ])
@@ -759,11 +839,8 @@ class CopyManga extends ComicSource {
             while (attempt < maxAttempts) {
                 try {
                     let reqId = await this.getReqID();
-                    res = await Network.get(
-                        `${this.apiUrl}/api/v3/comic/${comicId}/chapter2/${epId}?in_mainland=true&request_id=${reqId}`,
-                        {
-                            ...this.headers
-                        }
+                    res = await this.apiGet(
+                        `/api/v3/comic/${comicId}/chapter2/${epId}?in_mainland=true&request_id=${reqId}`
                     );
 
                     if (res.status === 210) {
@@ -841,14 +918,11 @@ class CopyManga extends ComicSource {
             };
         },
         loadComments: async (comicId, subId, page, replyTo) => {
-            let url = `${this.apiUrl}/api/v3/comments?comic_id=${subId}&limit=20&offset=${(page - 1) * 20}`;
+            let path = `/api/v3/comments?comic_id=${subId}&limit=20&offset=${(page - 1) * 20}`;
             if (replyTo) {
-                url = url + `&reply_id=${replyTo}&_update=true`;
+                path = path + `&reply_id=${replyTo}&_update=true`;
             }
-            let res = await Network.get(
-                url,
-                this.headers,
-            );
+            let res = await this.apiGet(path);
 
             if (res.status !== 200) {
                 if (res.status === 210) {
@@ -883,8 +957,8 @@ class CopyManga extends ComicSource {
             if (!replyTo) {
                 replyTo = '';
             }
-            let res = await Network.post(
-                `${this.apiUrl}/api/v3/member/comment`,
+            let res = await this.apiPost(
+                `/api/v3/member/comment`,
                 {
                     ...this.headers,
                     "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
@@ -903,11 +977,8 @@ class CopyManga extends ComicSource {
             }
         },
         loadChapterComments: async (comicId, epId, page, replyTo) => {
-            let url = `${this.apiUrl}/api/v3/roasts?chapter_id=${epId}&limit=20&offset=${(page - 1) * 20}`;
-            let res = await Network.get(
-                url,
-                this.headers,
-            );
+            let path = `/api/v3/roasts?chapter_id=${epId}&limit=20&offset=${(page - 1) * 20}`;
+            let res = await this.apiGet(path);
 
             if (res.status !== 200) {
                 throw `Invalid status code: ${res.status}`;
@@ -936,8 +1007,8 @@ class CopyManga extends ComicSource {
             if (!token) {
                 throw "未登录"
             }
-            let res = await Network.post(
-                `${this.apiUrl}/api/v3/member/roast`,
+            let res = await this.apiPost(
+                `/api/v3/member/roast`,
                 {
                     ...this.headers,
                     "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",

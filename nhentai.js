@@ -17,7 +17,7 @@ class Nhentai extends ComicSource {
     // unique id of the source
     key = "nhentai"
 
-    version = "1.1.4"
+    version = "1.1.5"
 
     minAppVersion = "1.0.0"
 
@@ -77,7 +77,7 @@ class Nhentai extends ComicSource {
         let idMatch = href.match(regex);
         let id = idMatch ? idMatch.join('') : "";
         let lang = "Unknown";
-        let tags = element.attributes?.["class"];
+        let tags = element.attributes?.["class"] || "";
         if (tags.includes("lang-gb")) {
             lang = "English";
         } else if (tags.includes("lang-jp")) {
@@ -145,6 +145,10 @@ class Nhentai extends ComicSource {
         if (!path) {
             return path
         }
+        // API 偶发返回重复扩展名 (如 cover.webp.webp / 2t.webp.webp), 合并为一个
+        path = path.replace(/(\.(jpg|png|webp|gif))+/gi, (m) => {
+            return m.match(/\.(jpg|png|webp|gif)/gi)[0]
+        })
         if (path.startsWith("http")) {
             return path
         }
@@ -574,6 +578,13 @@ class Nhentai extends ComicSource {
                 let classAttr = tagEl?.attributes?.["class"];
                 let tagId = classAttr?.match(/tag-(\d+)/)?.[1];
                 if (!tagId) {
+                    // 新页面 (SvelteKit): h1 内 <span class="count" title="233,144 galleries">
+                    let countTitle = document.querySelector("div#content > h1 span.count")?.attributes?.["title"] || ""
+                    let countMatch = countTitle.match(/[\d,]+/)
+                    if (countMatch) {
+                        total = parseInt(countMatch[0].replaceAll(",", ""))
+                        break;
+                    }
                     let h1 = document.querySelector("div#content > h1")?.text || ""
                     numbers = h1.match(/\d+/g)
                     if(numbers) {
@@ -1070,9 +1081,23 @@ class Nhentai extends ComicSource {
                 if (images.length > 0) {
                     return { images: images }
                 }
-            } else {
+            }
+            // API 失败/无数据时回退到网页解析: 缩略图 <n>t.<ext> 换全图 <n>.<ext>
+            let res = await Network.get(`${this.baseUrl}/g/${comicId}/`, this.webHeaders)
+            if (res.status !== 200) {
+                throw "Invalid Status Code: " + (apiRes.status !== 200 ? apiRes.status : res.status)
+            }
+            let document = new HtmlDocument(res.body)
+            let images = document.querySelectorAll("a.gallerythumb > img")
+                .map(e => e.attributes?.["data-src"] || e.attributes?.["src"] || "")
+                .filter(Boolean)
+                .map(u => u
+                    .replace(/^(https?:)?\/\/t\d\.nhentai\.net/, `https://${this.imageServer.replace(/^https?:\/\//, "")}`)
+                    .replace(/(\d+)t\.(jpg|png|webp|gif)(\.\w+)?$/i, "$1.$2"))
+            if (images.length === 0) {
                 throw "Invalid Status Code: " + apiRes.status
             }
+            return { images: images }
         },
         /**
          * [Optional] load comments
