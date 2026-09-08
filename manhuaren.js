@@ -4,7 +4,7 @@ class ManHuaRen extends ComicSource {
 
     key = "manhuaren"
 
-    version = "1.0.0"
+    version = "1.0.1"
 
     minAppVersion = "1.6.0"
 
@@ -67,6 +67,29 @@ class ManHuaRen extends ComicSource {
         }
     }
 
+    // 首页专区"更多"链接 -> 分类页 (viewMore 必须使用 PageJumpTarget, 不能传 URL 字符串)
+    _viewMoreTarget(href) {
+        let map = {
+            '/manhua-shounen/': '少年漫画',
+            '/manhua-shoujo/': '少女漫画',
+            '/manhua-jpkr/': '日漫大佬',
+            '/manhua-completed/': '完结佳作',
+            '/manhua-rank/?t=7': '上升最快',
+            '/manhua-rank/': '上升最快',
+        };
+        let category = map[href];
+        if (!category) return null;
+        return {
+            page: 'category',
+            attributes: { category: category, param: null },
+        };
+    }
+
+    // 只保留漫画条目链接 (/manhua-xxx/), 过滤书单/VIP等非漫画链接
+    _isComicHref(href) {
+        return typeof href === 'string' && /^\/manhua-[^/]+\/$/.test(href);
+    }
+
     // explore page list
     explore = [
         {
@@ -97,12 +120,12 @@ class ManHuaRen extends ComicSource {
                         let a = item.querySelector('a');
                         if (!a) continue;
                         let img = item.querySelector('img');
-                        
+
                         let href = a.attributes['href'];
-                        let title = a.attributes['title'];
+                        let title = a.attributes['title'] || (img ? img.attributes['alt'] : '');
                         let cover = img ? (img.attributes['src'] || img.attributes['data-src']) : '';
-                        
-                        if (href) {
+
+                        if (href && this._isComicHref(href)) {
                             if (!href.startsWith('http')) href = this.baseUrl + href;
                             if (cover && !cover.startsWith('http')) {
                                 if (cover.startsWith('//')) cover = 'https:' + cover;
@@ -121,24 +144,60 @@ class ManHuaRen extends ComicSource {
                     }
                 }
 
+                // 底部排行榜 swiper (rank_1..4 = 人气/新番/收藏/吐槽)
+                let rankSlideNames = ['人气榜', '新番榜', '收藏榜', '吐槽榜'];
+                let rankSlides = doc.querySelectorAll('#rank_list .swiper-slide');
+                for (let i = 0; i < rankSlides.length; i++) {
+                    let comics = [];
+                    for (let li of rankSlides[i].querySelectorAll('li')) {
+                        let a = li.querySelector('a');
+                        if (!a) continue;
+                        let href = a.attributes['href'];
+                        if (!this._isComicHref(href)) continue;
+                        let img = li.querySelector('img');
+                        let cover = img ? (img.attributes['src'] || img.attributes['data-src']) : '';
+                        if (cover && !cover.startsWith('http')) cover = 'https:' + cover;
+                        let titleNode = li.querySelector('.rank-list-info-right-title');
+                        let title = a.attributes['title'] || (titleNode ? titleNode.text.trim() : '');
+                        let subNode = li.querySelector('.rank-list-info-right-subtitle');
+                        comics.push(new Comic({
+                            id: this.baseUrl + href,
+                            title: title || '',
+                            cover: cover || '',
+                            description: subNode ? subNode.text.trim() : '',
+                        }));
+                    }
+                    if (comics.length > 0) {
+                        parts.push({ title: rankSlideNames[i] || `排行榜${i + 1}`, comics });
+                    }
+                }
+
                 // Lists
                 let lists = doc.querySelectorAll('.manga-list');
                 for (let i = 0; i < lists.length; i++) {
                     let list = lists[i];
                     let titleNode = list.querySelector('.manga-list-title');
                     let title = titleNode ? titleNode.text.trim() : '';
-                    
+                    // 去除标题中"更多"链接文字
+                    title = title.replace(/更多\s*$/, '').trim();
+
+                    // 跳过溢出/非漫画版块: 排行榜 swiper、VIP专区、精品书单
+                    if (!title || title.includes('排行榜')) continue;
+
                     let viewMore = null;
+                    let moreHref = null;
                     if (titleNode) {
                         let moreNode = titleNode.querySelector('a');
                         if (moreNode) {
                             let href = moreNode.attributes['href'];
-                            if (href) {
-                                if (!href.startsWith('http')) href = this.baseUrl + href;
-                                viewMore = href;
-                            }
+                            moreHref = href || null;
                         }
                     }
+                    // VIP专区(付费)与精品书单(书单页, 非漫画)整体跳过
+                    if (moreHref && (moreHref.startsWith('/vip') || moreHref.startsWith('/comicbook'))) {
+                        continue;
+                    }
+                    if (moreHref) viewMore = this._viewMoreTarget(moreHref);
 
                     let comics = [];
                     let items = list.querySelectorAll('li');
@@ -146,49 +205,42 @@ class ManHuaRen extends ComicSource {
                         let item = items[j];
                         let a = item.querySelector('a');
                         if (!a) continue;
-                        
+
                         let href = a.attributes['href'];
+                        if (!this._isComicHref(href)) continue;
+
                         let comicTitle = a.attributes['title'];
-                        
+
                         if (!comicTitle) {
                             let t = item.querySelector('.manga-list-2-title');
                             if (t) comicTitle = t.text.trim();
                         }
-                        
+
                         let img = item.querySelector('img');
                         let cover = img ? (img.attributes['data-src'] || img.attributes['src']) : '';
-                        
+
                         let tip = item.querySelector('.manga-list-1-tip') || item.querySelector('.manga-list-2-tip');
                         let desc = tip ? tip.text.trim() : '';
-                        
+
                         let badgeNode = item.querySelector('.manga-list-1-cover-logo-font');
                         let badge = badgeNode ? badgeNode.text.trim() : '';
 
-                        if (href) {
-                            if (!href.startsWith('http')) href = this.baseUrl + href;
-                            if (cover && !cover.startsWith('http')) {
-                                if (cover.startsWith('//')) cover = 'https:' + cover;
-                                else cover = this.baseUrl + cover;
-                            }
-                            
-                            comics.push(new Comic({
-                                id: href,
-                                title: comicTitle || '',
-                                cover: cover || '',
-                                description: desc,
-                                tags: badge ? [badge] : []
-                            }));
+                        if (!href.startsWith('http')) href = this.baseUrl + href;
+                        if (cover && !cover.startsWith('http')) {
+                            if (cover.startsWith('//')) cover = 'https:' + cover;
+                            else cover = this.baseUrl + cover;
                         }
+
+                        comics.push(new Comic({
+                            id: href,
+                            title: comicTitle || '',
+                            cover: cover || '',
+                            description: desc,
+                            tags: badge ? [badge] : []
+                        }));
                     }
 
                     if (comics.length > 0) {
-                        if (!title) {
-                            if (comics[0].tags && comics[0].tags.length > 0) {
-                                title = comics[0].tags[0];
-                            } else {
-                                title = '漫画列表';
-                            }
-                        }
                         let part = { title: title, comics: comics };
                         if (viewMore) part.viewMore = viewMore;
                         parts.push(part);
@@ -206,6 +258,26 @@ class ManHuaRen extends ComicSource {
         /// title of the category page, used to identify the page, it should be unique
         title: "漫画人",
         parts: [
+            {
+                // 频道: 网站特色专区 (参数实测自各专区页面的 AJAX 变量)
+                name: "频道",
+                type: "fixed",
+                itemType: "category",
+                categories: [
+                    "少年漫画",
+                    "少女漫画",
+                    "日漫大佬",
+                    "完结佳作",
+                    "上升最快",
+                ],
+                categoryParams: [
+                    "ch-shounen",
+                    "ch-shoujo",
+                    "ch-jpkr",
+                    "ch-completed",
+                    "ch-upfast",
+                ],
+            },
             {
                 // title of the part
                 name: "类型",
@@ -282,56 +354,71 @@ class ManHuaRen extends ComicSource {
         enableRankingPage: false,
     }
 
+    // 专区参数预设 (实测自各频道页内嵌变量)
+    get _channelPresets() {
+        return {
+            'ch-shounen':   { usergroup: 1, pay: 1, status: 0, areaid: 0,  sort: 10 },
+            'ch-shoujo':    { usergroup: 2, pay: 1, status: 0, areaid: 0,  sort: 10 },
+            'ch-jpkr':      { usergroup: 0, pay: -1, status: 0, areaid: 36, sort: 10 },
+            'ch-completed': { usergroup: 0, pay: -1, status: 2, areaid: 0, sort: 10 },
+            // 上升最快是独立 action
+            'ch-upfast':    null,
+        };
+    }
+
     categoryComics = {
         load: async (category, param, options, page) => {
-            // param is expected to be the tag id (e.g. "31").
-            let tag = param || '';
-
-            // options: [statusOption, sortOption]
-            // option values use left side before '-' (e.g. 'st1-连载' -> 'st1')
+            // 选项: [状态, 排序]
             let statusOpt = (options && options[0]) ? options[0].split('-')[0] : '';
             let sortOpt = (options && options[1]) ? options[1].split('-')[0] : '';
+            let statusNum = 0;
+            if (statusOpt) {
+                let m = statusOpt.match(/st(\d+)/);
+                if (m) statusNum = parseInt(m[1]);
+            }
+            let sortNum = 0;
+            if (sortOpt) {
+                let m = sortOpt.match(/s(\d+)/);
+                if (m) sortNum = parseInt(m[1]);
+            }
 
-            // Build path like: manhua-list(-tag{tag})?(-{status})?(-{sort})?/dm5.ashx
-            let path = 'manhua-list';
-            if (tag) path += `-tag${tag}`;
-            if (statusOpt) path += `-${statusOpt}`;
-            if (sortOpt) path += `-${sortOpt}`;
+            let pageIndex = Math.max(1, parseInt(page) || 1);
+            let pageSize = 21;
 
-            let url = `${this.baseUrl}/${path}/dm5.ashx`;
-                // POST body: use site form-data fields
-                // action=getclasscomics&pageindex=3&pagesize=21&categoryid=0&tagid=0&status=1&usergroup=0&pay=-1&areaid=0&sort=2&iscopyright=0
-                let pageIndex = Math.max(0, (parseInt(page) || 1));
-                let pageSize = 21;
-                // map status option like 'st1' -> 1, 'st2' -> 2
-                let statusNum = 0;
-                if (statusOpt && statusOpt.startsWith('st')) {
-                    let m = statusOpt.match(/st(\d+)/);
-                    if (m) statusNum = parseInt(m[1]);
+            let action = 'getclasscomics';
+            let bodyParts;
+
+            let channelPreset = param ? this._channelPresets[param] : undefined;
+            if (param === 'ch-upfast') {
+                // 上升最快: 独立接口, 仅按页码
+                action = 'getupfastcomics';
+                bodyParts = `action=${action}&pageindex=${pageIndex}&pagesize=${pageSize}`;
+            } else {
+                let tagId = '0', usergroup = 0, pay = -1, areaid = 0, iscopyright = 0;
+                if (channelPreset !== undefined) {
+                    tagId = '0';
+                    usergroup = channelPreset.usergroup;
+                    pay = channelPreset.pay;
+                    areaid = channelPreset.areaid;
+                    if (!statusNum) statusNum = channelPreset.status;
+                    if (!sortNum) sortNum = channelPreset.sort;
+                } else if (param) {
+                    tagId = param;
                 }
-                // map sort option like 's2' -> 2, 's18' -> 18
-                let sortNum = 0;
-                if (sortOpt && sortOpt.startsWith('s')) {
-                    let m = sortOpt.match(/s(\d+)/);
-                    if (m) sortNum = parseInt(m[1]);
-                }
-                // tag id (tag param) - if empty use 0
-                let tagId = tag && tag.length > 0 ? tag : '0';
+                if (!sortNum) sortNum = 2;
+                bodyParts = `action=${action}&pageindex=${pageIndex}&pagesize=${pageSize}&categoryid=0&tagid=${tagId}&status=${statusNum}&usergroup=${usergroup}&pay=${pay}&areaid=${areaid}&sort=${sortNum}&iscopyright=${iscopyright}`;
+            }
 
-                let body = `action=getclasscomics&pageindex=${pageIndex}&pagesize=${pageSize}&categoryid=0&tagid=${encodeURIComponent(tagId)}&status=${statusNum}&usergroup=0&pay=-1&areaid=0&sort=${sortNum}&iscopyright=0`;
+            let url = `${this.baseUrl}/manhua-list/dm5.ashx`;
 
-            // 使用站点期望的 AJAX 请求头（不包含 cookie）
             let categoryHeaders = {
                 'accept': 'application/json, text/javascript, */*; q=0.01',
-                'accept-encoding': 'gzip, deflate, br, zstd',
                 'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
                 'cache-control': 'no-cache',
-                'connection': 'keep-alive',
                 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'host': 'www.manhuaren.com',
                 'origin': this.baseUrl,
                 'pragma': 'no-cache',
-                'referer': `${this.baseUrl}/${path}/`,
+                'referer': `${this.baseUrl}/manhua-list/`,
                 'sec-fetch-dest': 'empty',
                 'sec-fetch-mode': 'cors',
                 'sec-fetch-site': 'same-origin',
@@ -339,7 +426,7 @@ class ManHuaRen extends ComicSource {
                 'x-requested-with': 'XMLHttpRequest'
             };
 
-            let res = await Network.post(url, categoryHeaders, body);
+            let res = await Network.post(url, categoryHeaders, bodyParts);
             if (res.status !== 200) {
                 throw `加载分类漫画失败: ${res.status}`;
             }
@@ -353,31 +440,34 @@ class ManHuaRen extends ComicSource {
 
             let items = data.UpdateComicItems || [];
             let comics = items.map(it => {
-                // UrlKey already contains path like "manhua-xxxx"
                 let id = it.UrlKey ? `/${it.UrlKey}/` : (it.ID ? `/m${it.ID}/` : '');
                 let cover = it.ShowPicUrlB || it.ShowConver || '';
                 if (cover && cover.startsWith('//')) cover = 'https:' + cover;
                 if (cover && !cover.startsWith('http')) cover = this.baseUrl + cover;
 
                 let tags = [];
-                if (it.Author && Array.isArray(it.Author)) tags = it.Author.slice(0,3);
+                if (it.ShowLastPartName) {
+                    tags.push((it.Status === 1 ? '完结 ' : '最新 ') + it.ShowLastPartName.trim());
+                }
+                if (it.LastUpdateTime) tags.push(it.LastUpdateTime);
+                if (it.ShowReads) tags.push(`${it.ShowReads}阅读`);
 
                 return new Comic({
                     id: id,
                     title: it.Title,
+                    subTitle: (it.Author || []).join(' '),
                     cover: cover,
                     description: it.Content || '',
                     tags: tags
                 });
             });
 
-            let perPage = items.length || 20;
             let total = data.Count || 0;
-            let maxPage = perPage > 0 ? Math.max(1, Math.ceil(total / perPage)) : (comics.length > 0 ? page + 1 : page);
+            let maxPage = total > 0 ? Math.max(1, Math.ceil(total / pageSize)) : (comics.length > 0 ? pageIndex + 1 : pageIndex);
 
             return {
                 comics: comics,
-                maxPage: maxPage+1
+                maxPage: maxPage
             };
         },
 
@@ -504,7 +594,6 @@ class ManHuaRen extends ComicSource {
             }
 
             let html = res.body || '';
-            this.comic.id = id;
 
             let toAbsUrl = (value) => {
                 if (!value) return '';
@@ -652,10 +741,11 @@ class ManHuaRen extends ComicSource {
 
             let recommends = parseRecommends(html);
 
-            // 提取 mid
-            let midMatch = html.match(/mid["\s:]*(\d+)/i) || html.match(/var mid = (\d+)/i) || html.match(/mid=(\d+)/i) || html.match(/var DM5_MID = (\d+)/i) || html.match(/var COMIC_MID=(\d+)/i);
+            // 提取 mid (评论接口所需); 不再写入 this.comic 共享状态, 避免并发串号
+            let mid = null;
+            let midMatch = html.match(/var\s+(?:DM5_MID|COMIC_MID|MID)\s*=\s*(\d+)/i) || html.match(/mid[="'\s:]+(\d+)/i);
             if (midMatch) {
-                this.comic.mid = parseInt(midMatch[1]);
+                mid = parseInt(midMatch[1]);
             }
 
             return new ComicDetails({
@@ -671,7 +761,8 @@ class ManHuaRen extends ComicSource {
                 recommend: recommends,
                 updateTime: updateTime,
                 stars: starValue,
-                subId: this.comic.mid ? this.comic.mid.toString() : '73225'
+                // mid 提取不到时置 null (原默认 '73225' 会串到别的漫画评论)
+                subId: mid ? mid.toString() : null
             });
         },
 
@@ -841,9 +932,8 @@ class ManHuaRen extends ComicSource {
             let data = JSON.parse(res.body);
             let comments = [];
 
-            let maxPage = 0
             if (replyTo) {
-                let target = data.find(item => item.Id.toString() === targetCommentId);
+                let target = Array.isArray(data) ? data.find(item => item.Id.toString() === targetCommentId) : null;
                 if (target && target.ToPostShowDataItems) {
                     comments = target.ToPostShowDataItems.map(item => new Comment({
                         id: item.Id.toString(),
@@ -856,27 +946,23 @@ class ManHuaRen extends ComicSource {
                         replyCount: 0
                     }));
                 }
-            } else {
+            } else if (Array.isArray(data)) {
                 comments = data.map(item => new Comment({
                     id: `${item.Id}//${page}`,
                     userName: item.Poster,
                     content: item.PostContent,
                     time: item.PostTime,
-                    avatar: item.HeadUrl, 
+                    avatar: item.HeadUrl,
                     likeCount: item.PraiseCount,
                     isLiked: item.IsPraise,
                     replyCount: item.ToPostShowDataItems ? item.ToPostShowDataItems.length : 0
                 }));
-                if (comments == []){
-                    maxPage = page;
-                }else{
-                    maxPage = null;
-                }
             }
 
             return {
                 comments: comments,
-                maxPage: replyTo? 1 : maxPage
+                // 一页拉取全部主评论(pagesize=767), 翻页为空即结束; 回复只有一页
+                maxPage: replyTo ? 1 : (comments.length > 0 ? page + 1 : page)
             };
         },
 
@@ -934,9 +1020,8 @@ class ManHuaRen extends ComicSource {
             } catch (e) {}
 
             if (!Array.isArray(data)) return { comments: [], maxPage: page };
-            
+
             let comments = [];
-            let maxPage = 0
             if (replyTo) {
                 let target = data.find(item => item.Id.toString() === targetCommentId);
                 if (target && target.ToPostShowDataItems) {
@@ -962,16 +1047,11 @@ class ManHuaRen extends ComicSource {
                     isLiked: item.IsPraise,
                     replyCount: item.ToPostShowDataItems ? item.ToPostShowDataItems.length : 0
                 }));
-                if (comments == []){
-                    maxPage = page;
-                }else{
-                    maxPage = null;
-                }
             }
 
             return {
                 comments: comments,
-                maxPage: replyTo? 1 : maxPage
+                maxPage: replyTo ? 1 : (comments.length > 0 ? page + 1 : page)
             };
         },
     }
