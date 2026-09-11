@@ -187,8 +187,8 @@
         "name": "紳士漫畫",
         "fileName": "wnacg.js",
         "key": "wnacg",
-        "version": "1.1.0",
-        "description": "紳士漫畫漫畫源, 不能使用時請嘗試更換URL"
+        "version": "2.0.0",
+        "description": "紳士漫畫漫畫源, 自動探測並切換鏡像域名, 支持評論/收藏"
     },
     {
         "name": "优酷漫画",
