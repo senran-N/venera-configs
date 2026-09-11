@@ -59,7 +59,7 @@ class ManHuaRen extends ComicSource {
 
     key = "manhuaren"
 
-    version = "2.0.0"
+    version = "2.0.1"
 
     minAppVersion = "1.6.0"
 
@@ -225,6 +225,20 @@ class ManHuaRen extends ComicSource {
         return m ? m[1] : null
     }
 
+    // 从章节 id/URL 严格解析 cid（只接受 /m<cid>/、m<cid>、纯数字）
+    _chapterCid(value) {
+        let s = String(value === undefined || value === null ? "" : value).trim()
+        let m = s.match(/\/m(\d+)\/?(?:[?#].*)?$/i) || s.match(/^m(\d+)$/i) || s.match(/^(\d+)$/)
+        return m ? m[1] : null
+    }
+
+    // 章节 id/URL 归一化为标准章节页 URL（/m{cid}/）
+    _chapterUrl(value) {
+        let cid = this._chapterCid(value)
+        if (cid) return `${this.baseUrl}/m${cid}/`
+        return this._abs(value)
+    }
+
     // ============================== HTML 片段解析 ==============================
 
     // 解析 manga-list 卡片(列表页/首页/推荐位共用)
@@ -369,8 +383,8 @@ class ManHuaRen extends ComicSource {
      */
     _parseChapters(doc) {
         let chapters = new Map()
-        let boxes = doc.querySelectorAll(".detail-list")
-        if (boxes.length === 0) boxes = doc.querySelectorAll(".detail-list-2")
+        // 在线页为 ul.detail-list-1.detail-list-select；兼容旧主题 .detail-list / .detail-list-2
+        let boxes = doc.querySelectorAll(".detail-list-1, .detail-list, .detail-list-2")
         for (let box of boxes) {
             for (let a of box.querySelectorAll("a")) {
                 let key = this._chapterKey(this._attr(a, "href"))
@@ -831,7 +845,24 @@ class ManHuaRen extends ComicSource {
          * @returns {Promise<{images: string[]}>}
          */
         loadEp: async (comicId, epId) => {
-            let url = this._abs(epId)
+            let target = epId
+            // 兜底: 空/历史丢失的章节 id 时, 从详情页取页面顺序第一话
+            if (!this._chapterCid(target)) {
+                let detailUrl = this._comicUrl(comicId)
+                let detailHtml = await this._fetch(detailUrl, this.baseUrl + "/")
+                let doc = new HtmlDocument(detailHtml)
+                let chapters
+                try {
+                    chapters = this._parseChapters(doc)
+                } finally {
+                    doc.dispose()
+                }
+                if (chapters.size === 0) {
+                    throw new Error(`章节 id 无效且详情页未解析到章节: comicId=${comicId} epId=${epId}`)
+                }
+                target = chapters.keys().next().value
+            }
+            let url = this._chapterUrl(target)
             if (!url || url === this.baseUrl) {
                 throw new Error(`章节 id 无效: ${epId}`)
             }
@@ -853,7 +884,7 @@ class ManHuaRen extends ComicSource {
          * @returns {ImageLoadingConfig}
          */
         onImageLoad: (url, comicId, epId) => {
-            let referer = epId ? this._abs(epId) : this.baseUrl + "/"
+            let referer = epId ? this._chapterUrl(epId) : this.baseUrl + "/"
             return { headers: this._imageHeaders(referer) }
         },
 
