@@ -1,13 +1,55 @@
+/** @type {import('./_venera_.js')} */
+
 /**
- * 章节图片解码器 — 移植自 keiyoushi/extensions-source (PR #16898)
+ * GoDa漫画 (G站漫画) —— Venera 漫画源（完全重写版 v2）
  *
- * /api/v2/chapter/getinfo 接口返回的图片列表是混淆后的字符串，而非普通数组。
- * 此解码器将该字符串还原为原始 JSON 图片数组。
+ * ============================ 原站分析 ============================
+ * 站点程序: Astro 静态站点 + 独立 v2 JSON API
+ * 主域名:   https://godamh.com            （设置项 domains，可换域名）
+ * API 域名:  https://{api}/api/v2          （设置项 api，默认 v2.apikk.top）
+ * 图片 CDN:  https://{image}               （设置项 image，默认 c-nd3-1.6wm.top）
+ * 分析依据:  _analysis/fixtures/goda/ 下 2026-09-11 的真实抓取夹具
+ *            （home.html / manga_list.html / search_ship.html / detail.html /
+ *              manga_get.json / chapter_getinfo.json；逐条见 manifest.jsonl）
  *
- * 解码流程：去除 "J7r" 前缀 / "nQ" 后缀 → 按 "kD" 和 "W4s" 标记拆分为 3 段
- * → 重新排序为 段3+段1+段2 → 每隔一个 7 字符块反转 → 将自定义字母表映射回
- * 标准 base64url → base64 解码 → UTF-8 JSON。
+ * 1) 首页 /                Astro 输出；区块标题为 <h2>，其后跟一个
+ *                           div.cardlist（grid）:
+ *                            div.cardlist > div.pb-2 > a[href=/manga/<slug>]
+ *                              > div.text-center > div.aspect-3-4 > img.card[src]
+ *                              + h3.cardtitle（标题）
+ *                           “近期更新”横滑: .slicarddiv > a.slicarda[href]
+ *                              > img.slicardimg[src] + .slicardtitle
+ *                           （同一部漫画可能重复出现，按 href 去重）
+ * 2) 列表 /manga[/page/N]   结构同 cardlist 的 .pb-2；翻页控件:
+ *                           button.abutton.text-small（数字按钮，最后一个为最大页；
+ *                           省略号为 “...” 非数字，解析时过滤）
+ *                           /manga-genre/{kr,cn,jp,hots,qita,ou-mei}、
+ *                           /manga-tag/<token> 同样分页
+ * 3) 搜索 /s/<kw>?page=N    结构同 .pb-2；关键词需 URL 编码
+ * 4) 详情 /manga/<slug>     #mangachapters[data-mid]（漫画数字 id）
+ *                           h1.text-xl（标题，含 <span> 状态: 連載中/已完結…）
+ *                           div.text-small.py-1 > a[href^=/manga-author] > span（作者）
+ *                           div.text-sm.py-1  > a[href^=/manga-genre]  > span（类型）
+ *                           a[href^=/manga-tag] > span（标签，文本形如 “#冒险 ”）
+ *                           封面: img.object-cover（回退: 正文首张 /manga/ 图）
+ * 5) 章节接口 /api/v2/manga/get?mid={mid}&mode=all&t={ts}
+ *                           返回 { data: { chapters: [ { id, attributes:{ title } } ] } }
+ *                           章节 key = `${mid}@${id}`
+ * 6) 阅读接口 /api/v2/chapter/getinfo?m={mid}&c={cid}
+ *                           返回 { data: { info: { images: { images: "<混淆串>" } } } }
+ *                           混淆串解码见 decodeChapterImages（移植自 keiyoushi）。
+ *                           解码后为 [{ url }]，原站返回相对路径，需前缀 imageUrl。
+ * ================================================================
  */
+
+// ---------------------------------------------------------------------------
+// 章节图片解码器 — 移植自 keiyoushi/extensions-source (PR #16898)
+//
+// /api/v2/chapter/getinfo 返回的 images 是混淆字符串而非普通数组:
+//   去除 "J7r" 前缀 / "nQ" 后缀 → 按 "kD" 与 "W4s" 标记拆 3 段
+//   → 重排为 段3+段1+段2 → 每隔一个 7 字符块反转
+//   → 自定义字母表映射回标准 base64url → base64 解码 → UTF-8 JSON。
+// ---------------------------------------------------------------------------
 const STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const CUSTOM = "_-9876543210abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const DECODE_PREFIX = "J7r";
@@ -16,498 +58,368 @@ const DECODE_MARKER2 = "W4s";
 const DECODE_SUFFIX = "nQ";
 const DECODE_GROUP = 7;
 
-// 预计算的查找表：自定义字母表字符码 → 标准 base64url 字符码（-1 表示无效）
 const DECODE_TABLE = new Array(128).fill(-1);
 for (let i = 0; i < CUSTOM.length; i++) {
-    DECODE_TABLE[CUSTOM.charCodeAt(i)] = STD.charCodeAt(i);
+  DECODE_TABLE[CUSTOM.charCodeAt(i)] = STD.charCodeAt(i);
+}
+
+/** 纯 JS base64 解码（venera 运行时无 atob），返回字节字符串供 JSON.parse */
+function decodeBase64(str) {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  str = str.replace(/=+$/, "");
+  let result = "";
+  let i = 0;
+  while (i < str.length) {
+    const enc1 = chars.indexOf(str.charAt(i));
+    const enc2 = chars.indexOf(str.charAt(i + 1));
+    const enc3 = str.charAt(i + 2) ? chars.indexOf(str.charAt(i + 2)) : -1;
+    const enc4 = str.charAt(i + 3) ? chars.indexOf(str.charAt(i + 3)) : -1;
+    if (enc1 < 0 || enc2 < 0) throw "Invalid base64 character";
+    result += String.fromCharCode((enc1 << 2) | (enc2 >> 4));
+    if (enc3 >= 0) result += String.fromCharCode(((enc2 & 15) << 4) | (enc3 >> 2));
+    if (enc4 >= 0) result += String.fromCharCode(((enc3 & 3) << 6) | enc4);
+    i += 4;
+  }
+  return result;
 }
 
 function decodeChapterImages(input) {
-    if (typeof input !== "string" || !input.startsWith(DECODE_PREFIX) || !input.endsWith(DECODE_SUFFIX)) {
-        throw "未知的章节数据格式";
-    }
-    const body = input.substring(DECODE_PREFIX.length, input.length - DECODE_SUFFIX.length);
-    const payloadLen = body.length - DECODE_MARKER1.length - DECODE_MARKER2.length;
-    if (payloadLen <= 0) {
-        throw "未知的章节数据格式";
-    }
+  if (typeof input !== "string" || !input.startsWith(DECODE_PREFIX) || !input.endsWith(DECODE_SUFFIX)) {
+    throw "未知的章节数据格式";
+  }
+  const body = input.substring(DECODE_PREFIX.length, input.length - DECODE_SUFFIX.length);
+  const payloadLen = body.length - DECODE_MARKER1.length - DECODE_MARKER2.length;
+  if (payloadLen <= 0) throw "未知的章节数据格式";
 
-    const aLen = Math.floor(payloadLen / 3);
-    const bLen = Math.floor((payloadLen - aLen) / 2);
-    const cLen = payloadLen - aLen - bLen;
+  const aLen = Math.floor(payloadLen / 3);
+  const bLen = Math.floor((payloadLen - aLen) / 2);
+  const cLen = payloadLen - aLen - bLen;
 
-    const part1 = body.substring(0, bLen);
-    const marker1 = body.substring(bLen, bLen + DECODE_MARKER1.length);
-    const part2 = body.substring(bLen + DECODE_MARKER1.length, bLen + DECODE_MARKER1.length + cLen);
-    const marker2 = body.substring(bLen + DECODE_MARKER1.length + cLen, bLen + DECODE_MARKER1.length + cLen + DECODE_MARKER2.length);
-    const part3 = body.substring(bLen + DECODE_MARKER1.length + cLen + DECODE_MARKER2.length);
+  const part1 = body.substring(0, bLen);
+  const marker1 = body.substring(bLen, bLen + DECODE_MARKER1.length);
+  const part2 = body.substring(bLen + DECODE_MARKER1.length, bLen + DECODE_MARKER1.length + cLen);
+  const marker2 = body.substring(bLen + DECODE_MARKER1.length + cLen, bLen + DECODE_MARKER1.length + cLen + DECODE_MARKER2.length);
+  const part3 = body.substring(bLen + DECODE_MARKER1.length + cLen + DECODE_MARKER2.length);
 
-    if (marker1 !== DECODE_MARKER1 || marker2 !== DECODE_MARKER2 || part3.length !== aLen) {
-        throw "未知的章节数据格式";
-    }
-
-    // 重新排序：段3 + 段1 + 段2
-    const reordered = part3 + part1 + part2;
-
-    // 去锯齿：每隔一个 GROUP 长度的块做反转
-    let unzigzagged = "";
-    for (let i = 0, block = 0; i < reordered.length; i += DECODE_GROUP, block++) {
-        const chunk = reordered.substring(i, Math.min(i + DECODE_GROUP, reordered.length));
-        unzigzagged += (block % 2 === 1) ? chunk.split('').reverse().join('') : chunk;
-    }
-
-    // 将自定义字母表映射为标准 base64url
-    let standard = "";
-    for (let i = 0; i < unzigzagged.length; i++) {
-        const code = unzigzagged.charCodeAt(i);
-        const mapped = code < DECODE_TABLE.length ? DECODE_TABLE[code] : -1;
-        if (mapped < 0) {
-            throw "无效的章节数据字符";
-        }
-        standard += String.fromCharCode(mapped);
-    }
-
-    // Base64 解码（纯 JS 实现，venera 运行时不支持 atob）。先将 base64url 转为标准 base64。
-    const standardBase64 = standard.replace(/-/g, '+').replace(/_/g, '/');
-    const json = decodeBase64(standardBase64);
-    return JSON.parse(json);
+  if (marker1 !== DECODE_MARKER1 || marker2 !== DECODE_MARKER2 || part3.length !== aLen) {
+    throw "未知的章节数据格式";
+  }
+  const reordered = part3 + part1 + part2;
+  let unzigzagged = "";
+  for (let i = 0, block = 0; i < reordered.length; i += DECODE_GROUP, block++) {
+    const chunk = reordered.substring(i, Math.min(i + DECODE_GROUP, reordered.length));
+    unzigzagged += (block % 2 === 1) ? chunk.split('').reverse().join('') : chunk;
+  }
+  let standard = "";
+  for (let i = 0; i < unzigzagged.length; i++) {
+    const code = unzigzagged.charCodeAt(i);
+    const mapped = code < DECODE_TABLE.length ? DECODE_TABLE[code] : -1;
+    if (mapped < 0) throw "无效的章节数据字符";
+    standard += String.fromCharCode(mapped);
+  }
+  const standardBase64 = standard.replace(/-/g, '+').replace(/_/g, '/');
+  return JSON.parse(decodeBase64(standardBase64));
 }
 
-/**
- * 纯 JavaScript base64 解码器（venera 运行时缺少 atob）。
- * 将 base64 解码为字节字符，供 JSON 解析使用。
- */
-function decodeBase64(str) {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    str = str.replace(/=+$/, "");
+const STATUS_WORDS = ["連載中", "已完結", "已完结", "完結", "連載", "连载", "休載"];
 
-    let result = "";
-    let i = 0;
-    while (i < str.length) {
-        const enc1 = chars.indexOf(str.charAt(i));
-        const enc2 = chars.indexOf(str.charAt(i + 1));
-        const enc3 = str.charAt(i + 2) ? chars.indexOf(str.charAt(i + 2)) : -1;
-        const enc4 = str.charAt(i + 3) ? chars.indexOf(str.charAt(i + 3)) : -1;
-
-        if (enc1 < 0 || enc2 < 0) {
-            throw "Invalid base64 character";
-        }
-
-        result += String.fromCharCode((enc1 << 2) | (enc2 >> 4));
-        if (enc3 >= 0) {
-            result += String.fromCharCode(((enc2 & 15) << 4) | (enc3 >> 2));
-        }
-        if (enc4 >= 0) {
-            result += String.fromCharCode(((enc3 & 3) << 6) | enc4);
-        }
-
-        i += 4;
-    }
-    return result;
-}
-
-/** @type {import('./_venera_.js')} */
 class Goda extends ComicSource {
-  // 注意：标记为 [可选] 的字段如果不使用，应将其删除
-
-  // 源名称
   name = "GoDa漫画"
-
-  // 源唯一标识
   key = "goda"
-
-  version = "1.2.1"
-
+  version = "2.0.0"
   minAppVersion = "1.4.0"
-
-  // 更新地址
   url = "https://cdn.jsdelivr.net/gh/senran-N/venera-configs@main/goda.js"
 
   settings = {
-    domains: {
-      title: "域名",
-      type: "input",
-      default: "godamh.com"
-    },
-    api: {
-      title: "API域名",
-      type: "input",
-      default: "v2.apikk.top"
-    },
-    image: {
-      title: "图片域名",
-      type: "input",
-      default: "c-nd3-1.6wm.top"
-    }
+    domains: { title: "域名", type: "input", default: "godamh.com" },
+    api: { title: "API域名", type: "input", default: "v2.apikk.top" },
+    image: { title: "图片域名", type: "input", default: "c-nd3-1.6wm.top" },
   }
 
-  get baseUrl() {
-    return `https://${this.loadSetting("domains")}`;
-  }
-
-  get apiUrl() {
-    return `https://${this.loadSetting("api")}/api/v2`;
-  }
-
-  get imageUrl() {
-    return `https://${this.loadSetting("image")}`;
-  }
-
+  get baseUrl() { return `https://${this.loadSetting("domains")}`; }
+  get apiUrl() { return `https://${this.loadSetting("api")}/api/v2`; }
+  get imageUrl() { return `https://${this.loadSetting("image")}`; }
   get headers() {
     return {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:144.0) Gecko/20100101 Firefox/144.0",
-      "Referer": this.baseUrl
+      "Referer": this.baseUrl + "/",
     };
   }
 
+  /** 相对地址补全为绝对地址（已是 http(s) 的保持不变） */
+  _abs(u) {
+    if (!u) return "";
+    if (/^https?:\/\//i.test(u)) return u;
+    return this.baseUrl + (u.startsWith("/") ? u : "/" + u);
+  }
+
+  /** 首页/列表/搜索统一的卡片解析: div.pb-2 > a > (img + h3.cardtitle) */
   parseComics(doc) {
+    const seen = new Set();
     const result = [];
     for (let item of doc.querySelectorAll(".pb-2")) {
       const link = item.querySelector("a");
       const titleEl = item.querySelector("h3");
       const img = item.querySelector("img");
-      if (link && titleEl && img && link.attributes["href"] && img.attributes["src"]) {
-        result.push(new Comic({
-          id: link.attributes["href"],
-          title: titleEl.text,
-          cover: img.attributes["src"]
-        }));
-      }
+      if (!link || !titleEl || !img) continue;
+      const href = link.attributes["href"];
+      const src = img.attributes["src"] || img.attributes["data-src"];
+      if (!href || !src) continue;
+      if (seen.has(href)) continue;
+      seen.add(href);
+      result.push(new Comic({
+        id: href,
+        title: (titleEl.text || "").trim(),
+        cover: this._abs(src),
+      }));
     }
     return result;
   }
 
-  // 发现页列表
+  /** “近期更新”横滑卡片: a.slicarda[href] > img + .slicardtitle */
+  parseSlicards(doc) {
+    const seen = new Set();
+    const result = [];
+    for (let item of doc.querySelectorAll(".slicarda")) {
+      const href = item.attributes["href"] || (item.querySelector("a") || {}).attributes?.href;
+      const img = item.querySelector("img");
+      const titleEl = item.querySelector(".slicardtitle") || item.querySelector("h3");
+      if (!href || !img || !titleEl) continue;
+      const src = img.attributes["src"] || img.attributes["data-src"];
+      if (!src || seen.has(href)) continue;
+      seen.add(href);
+      result.push(new Comic({ id: href, title: (titleEl.text || "").trim(), cover: this._abs(src) }));
+    }
+    return result;
+  }
+
+  /** 解析数字翻页按钮的最大页（过滤 “...” 等非数字按钮） */
+  maxPageOf(doc) {
+    let max = 1;
+    for (let b of doc.querySelectorAll("button")) {
+      const cls = (b.classNames || []).join(" ");
+      if (!/text-small/.test(cls)) continue;
+      const n = parseInt((b.text || "").replace(/[^0-9]/g, ""));
+      if (!isNaN(n) && n > max) max = n;
+    }
+    return max;
+  }
+
+  /** 向上回溯若干兄弟节点寻找所属区块的 <h2> 标题 */
+  _sectionTitle(cardlist) {
+    let el = cardlist.previousElementSibling;
+    let hops = 0;
+    while (el && hops < 8) {
+      const h2 = el.querySelector("h2");
+      if (h2 && h2.text) return h2.text.trim();
+      el = el.previousElementSibling;
+      hops++;
+    }
+    const p = cardlist.parent;
+    if (p) { const h2 = p.querySelector("h2"); if (h2 && h2.text) return h2.text.trim(); }
+    return "";
+  }
+
   explore = [
     {
-      // 页面标题
-      // title 用于标识页面，必须唯一
       title: this.name,
-
-      /// multiPartPage 或 multiPageComicList 或 mixed
       type: "multiPartPage",
-
       load: async () => {
-        const res = await Network.get(this.baseUrl, this.headers);
+        const res = await Network.get(this.baseUrl + "/", this.headers);
+        if (res.status !== 200) throw `Invalid status code: ${res.status}`;
         const document = new HtmlDocument(res.body);
-        const result = [{ title: "近期更新", comics: [], viewMore: null }];
-        for (let item of document.querySelector(".pb-unit-md").querySelectorAll(".slicarda")) {
-          result[0].comics.push(new Comic({
-            id: item.attributes["href"],
-            title: item.querySelector("h3").text,
-            cover: item.querySelector("img").attributes["src"]
-          }))
-        }
-        const cardlists = document.querySelectorAll(".cardlist");
-        const hometitles = document.querySelectorAll(".hometitle");
-        for (let i = 0; i < hometitles.length; i++) {
+        const result = [];
+
+        // 1) 近期更新（横滑）
+        const recent = this.parseSlicards(document);
+        if (recent.length) result.push({ title: "近期更新", comics: recent, viewMore: null });
+
+        // 2) 各 cardlist 区块，标题取区块前最近的 h2
+        for (let cardlist of document.querySelectorAll(".cardlist")) {
+          const comics = this.parseComics(cardlist);
+          if (!comics.length) continue;
+          const title = this._sectionTitle(cardlist) || "更多";
           result.push({
-            title: hometitles[i].querySelector("h2").text,
-            comics: this.parseComics(cardlists[i]),
-            viewMore: {
-              page: "category",
-              attributes: {
-                category: hometitles[i].querySelector("h2").text,
-                param: hometitles[i].attributes["href"]
-              },
-            }
+            title,
+            comics,
+            viewMore: { page: "category", attributes: { category: title, param: "/manga" } },
           });
         }
+        document.dispose();
         return result;
-      }
-    }
+      },
+    },
   ]
 
-  // 分类
   category = {
-    /// 分类页标题，用于标识页面，必须唯一
     title: this.name,
     parts: [
       {
         name: "类型",
         type: "fixed",
-        categories: [
-          "全部",
-          "韩漫",
-          "热门漫画",
-          "国漫",
-          "其他",
-          "日漫",
-          "欧美"
-        ],
+        categories: ["全部", "韩漫", "热门漫画", "国漫", "其他", "日漫", "欧美"],
         itemType: "category",
         categoryParams: [
-          "/manga",
-          "/manga-genre/kr",
-          "/manga-genre/hots",
-          "/manga-genre/cn",
-          "/manga-genre/qita",
-          "/manga-genre/jp",
-          "/manga-genre/ou-mei"
+          "/manga", "/manga-genre/kr", "/manga-genre/hots", "/manga-genre/cn",
+          "/manga-genre/qita", "/manga-genre/jp", "/manga-genre/ou-mei",
         ],
       },
       {
         name: "标签",
         type: "fixed",
         categories: [
-          "复仇",
-          "古风",
-          "奇幻",
-          "逆袭",
-          "异能",
-          "宅向",
-          "穿越",
-          "热血",
-          "纯爱",
-          "系统",
-          "重生",
-          "冒险",
-          "灵异",
-          "大女主",
-          "剧情",
-          "恋爱",
-          "玄幻",
-          "女神",
-          "科幻",
-          "魔幻",
-          "推理",
-          "猎奇",
-          "治愈",
-          "都市",
-          "异形",
-          "青春",
-          "末日",
-          "悬疑",
-          "修仙",
-          "战斗"
+          "复仇", "古风", "奇幻", "逆袭", "异能", "宅向", "穿越", "热血", "纯爱",
+          "系统", "重生", "冒险", "灵异", "大女主", "剧情", "恋爱", "玄幻", "女神",
+          "科幻", "魔幻", "推理", "猎奇", "治愈", "都市", "异形", "青春", "末日",
+          "悬疑", "修仙", "战斗",
         ],
         itemType: "category",
         categoryParams: [
-          "/manga-tag/fuchou",
-          "/manga-tag/gufeng",
-          "/manga-tag/qihuan",
-          "/manga-tag/nixi",
-          "/manga-tag/yineng",
-          "/manga-tag/zhaixiang",
-          "/manga-tag/chuanyue",
-          "/manga-tag/rexue",
-          "/manga-tag/chunai",
-          "/manga-tag/xitong",
-          "/manga-tag/zhongsheng",
-          "/manga-tag/maoxian",
-          "/manga-tag/lingyi",
-          "/manga-tag/danvzhu",
-          "/manga-tag/juqing",
-          "/manga-tag/lianai",
-          "/manga-tag/xuanhuan",
-          "/manga-tag/nvshen",
-          "/manga-tag/kehuan",
-          "/manga-tag/mohuan",
-          "/manga-tag/tuili",
-          "/manga-tag/lieqi",
-          "/manga-tag/zhiyu",
-          "/manga-tag/doushi",
-          "/manga-tag/yixing",
-          "/manga-tag/qingchun",
-          "/manga-tag/mori",
-          "/manga-tag/xuanyi",
-          "/manga-tag/xiuxian",
-          "/manga-tag/zhandou"
+          "/manga-tag/fuchou", "/manga-tag/gufeng", "/manga-tag/qihuan", "/manga-tag/nixi",
+          "/manga-tag/yineng", "/manga-tag/zhaixiang", "/manga-tag/chuanyue", "/manga-tag/rexue",
+          "/manga-tag/chunai", "/manga-tag/xitong", "/manga-tag/zhongsheng", "/manga-tag/maoxian",
+          "/manga-tag/lingyi", "/manga-tag/danvzhu", "/manga-tag/juqing", "/manga-tag/lianai",
+          "/manga-tag/xuanhuan", "/manga-tag/nvshen", "/manga-tag/kehuan", "/manga-tag/mohuan",
+          "/manga-tag/tuili", "/manga-tag/lieqi", "/manga-tag/zhiyu", "/manga-tag/doushi",
+          "/manga-tag/yixing", "/manga-tag/qingchun", "/manga-tag/mori", "/manga-tag/xuanyi",
+          "/manga-tag/xiuxian", "/manga-tag/zhandou",
         ],
-      }
+      },
     ],
-    // 是否启用排行榜页面
     enableRankingPage: false,
   }
 
-  /// 分类漫画加载
   categoryComics = {
     load: async (category, params, options, page) => {
-      const res = await Network.get(`${this.baseUrl}${params}/page/${page}`, this.headers);
-      if (res.status !== 200) {
-        throw `Invalid status code: ${res.status}`;
-      }
+      const url = page <= 1 ? `${this.baseUrl}${params}` : `${this.baseUrl}${params}/page/${page}`;
+      const res = await Network.get(url, this.headers);
+      if (res.status !== 200) throw `Invalid status code: ${res.status}`;
       const document = new HtmlDocument(res.body);
-      let maxPage = null;
-      try {
-        maxPage = parseInt(document.querySelectorAll("button.text-small").pop().text.replaceAll("\n", "").replaceAll(" ", ""));
-      } catch(_) {
-        maxPage = 1;
-      }
-      return {
-        comics: this.parseComics(document),
-        maxPage: maxPage
-      };
-    }
+      const comics = this.parseComics(document);
+      const maxPage = this.maxPageOf(document);
+      document.dispose();
+      return { comics, maxPage };
+    },
   }
 
-  /// 搜索相关
   search = {
     load: async (keyword, options, page) => {
-      const res = await Network.get(`${this.baseUrl}/s/${keyword}?page=${page}`, this.headers);
-      if (res.status !== 200) {
-        throw `Invalid status code: ${res.status}`;
-      }
+      const url = `${this.baseUrl}/s/${encodeURIComponent(keyword)}?page=${page}`;
+      const res = await Network.get(url, this.headers);
+      if (res.status !== 200) throw `Invalid status code: ${res.status}`;
       const document = new HtmlDocument(res.body);
-      let maxPage = null;
-      try {
-        maxPage = parseInt(document.querySelectorAll("button.text-small").pop().text.replaceAll("\n", "").replaceAll(" ", ""));
-      } catch(_) {
-        maxPage = 1;
-      }
-      return {
-        comics: this.parseComics(document),
-        maxPage: maxPage
-      };
+      const comics = this.parseComics(document);
+      const maxPage = this.maxPageOf(document);
+      document.dispose();
+      return { comics, maxPage };
     },
-    // 是否启用标签建议
     enableTagsSuggestions: false,
   }
 
-  /// 单部漫画相关
   comic = {
-    onThumbnailLoad: (url) => {
-      return {
-        headers: this.headers
-      }
-    },
+    onThumbnailLoad: (url) => ({ headers: this.headers }),
+
     loadInfo: async (id) => {
-      const res = await Network.get(this.baseUrl + id, this.headers);
-      if (res.status !== 200) {
-        throw `Invalid status code: ${res.status}`;
-      }
+      const res = await Network.get(this._abs(id), this.headers);
+      if (res.status !== 200) throw `Invalid status code: ${res.status}`;
       const document = new HtmlDocument(res.body);
 
-      const titleEl = document.querySelector(".text-xl");
-      const title = titleEl ? (titleEl.text || "").trim().split("   ")[0] : "";
+      const titleEl = document.querySelector("h1.text-xl") || document.querySelector("h1");
+      let title = titleEl ? (titleEl.text || "").replace(/\s+/g, " ").trim() : "";
+      for (const w of STATUS_WORDS) {
+        if (title.endsWith(w)) { title = title.slice(0, -w.length).trim(); break; }
+      }
 
-      const coverEl = document.querySelector(".object-cover");
-      const cover = (coverEl && coverEl.attributes && coverEl.attributes["src"]) || "";
+      let coverEl = document.querySelector("img.object-cover");
+      if (!coverEl) {
+        for (const img of document.querySelectorAll("img")) {
+          const s = img.attributes["src"] || "";
+          if (/6wm\.top|\/manga\//.test(s)) { coverEl = img; break; }
+        }
+      }
+      const cover = coverEl ? this._abs(coverEl.attributes["src"] || "") : "";
 
-      const descEl = document.querySelector("p.text-medium");
-      const description = descEl ? (descEl.text || "") : "";
+      const descEl = document.querySelector("p.text-medium") || document.querySelector(".text-medium");
+      let description = descEl ? (descEl.text || "").trim() : "";
 
-      const infos = document.querySelectorAll("div.py-1");
       const tags = { "作者": [], "类型": [], "标签": [] };
-      if (infos && infos.length >= 3) {
-        if (infos[0]) {
-          for (let author of infos[0].querySelectorAll("a > span")) {
-            let author_name = (author.text || "").trim();
-            if (author_name.endsWith(",")) {
-              author_name = author_name.slice(0, -1).trim();
-            }
-            if (author_name) tags["作者"].push(author_name);
-          }
-        }
-        if (infos[1]) {
-          for (let category of infos[1].querySelectorAll("a > span")) {
-            let category_name = (category.text || "").trim();
-            if (category_name.endsWith(",")) {
-              category_name = category_name.slice(0, -1).trim();
-            }
-            if (category_name) tags["类型"].push(category_name);
-          }
-        }
-        if (infos[2]) {
-          for (let tag of infos[2].querySelectorAll("a")) {
-            const tagText = (tag.text || "").replace("\n", "").replaceAll(" ", "").replace("#", "");
-            if (tagText) tags["标签"].push(tagText);
-          }
-        }
+      for (let a of document.querySelectorAll('a[href^="/manga-author"]')) {
+        const t = (a.querySelector("span") ? a.querySelector("span").text : a.text || "").replace(/[,，]\s*$/, "").trim();
+        if (t) tags["作者"].push(t);
+      }
+      for (let a of document.querySelectorAll('a[href^="/manga-genre"]')) {
+        const t = (a.querySelector("span") ? a.querySelector("span").text : a.text || "").replace(/[,，]\s*$/, "").trim();
+        if (t) tags["类型"].push(t);
+      }
+      for (let a of document.querySelectorAll('a[href^="/manga-tag"]')) {
+        const t = (a.querySelector("span") ? a.querySelector("span").text : a.text || "")
+          .replace(/\s+/g, "").replace(/^#/, "").trim();
+        if (t) tags["标签"].push(t);
       }
 
       const mangaEl = document.querySelector("#mangachapters");
       const mangaId = mangaEl && mangaEl.attributes ? mangaEl.attributes["data-mid"] : null;
-      if (!mangaId) {
-        throw "无法获取漫画ID";
-      }
+      if (!mangaId) throw "无法获取漫画ID";
 
-      const chapters = {};
+      const chapters = new Map();
       const jsonRes = await Network.get(`${this.apiUrl}/manga/get?mid=${mangaId}&mode=all&t=${Date.now()}`, this.headers);
-      if (jsonRes.status !== 200) {
-        throw `Invalid status code: ${jsonRes.status}`;
-      }
-      try {
-        const jsonData = JSON.parse(jsonRes.body);
-        if (jsonData && jsonData["data"] && jsonData["data"]["chapters"]) {
-          for (let ch of jsonData["data"]["chapters"]) {
-            if (ch["id"] != null && ch["attributes"] && ch["attributes"]["title"] != null) {
-              chapters[`${mangaId}@${ch["id"]}`] = ch["attributes"]["title"];
-            }
-          }
+      if (jsonRes.status !== 200) throw `Invalid status code: ${jsonRes.status}`;
+      let jsonData;
+      try { jsonData = JSON.parse(jsonRes.body); } catch (e) { throw "章节数据解析失败"; }
+      const chList = (jsonData && jsonData.data && jsonData.data.chapters) || [];
+      for (let ch of chList) {
+        if (ch && ch.id != null && ch.attributes && ch.attributes.title != null) {
+          chapters.set(`${mangaId}@${ch.id}`, ch.attributes.title);
         }
-      } catch (e) {
-        throw "章节数据解析失败";
       }
+      if (!description && jsonData && jsonData.data && jsonData.data.desc) description = jsonData.data.desc;
 
       const recommend = [];
-      for (let item of document.querySelectorAll("div.cardlist > div.pb-2")) {
-        const recLink = item.querySelector("a");
-        const recTitle = item.querySelector("h3");
-        const recImg = item.querySelector("img");
-        if (recLink && recTitle && recImg && recLink.attributes["href"] && recImg.attributes["src"]) {
-          recommend.push(new Comic({
-            id: recLink.attributes["href"],
-            title: recTitle.text,
-            cover: recImg.attributes["src"]
-          }));
+      for (let cardlist of document.querySelectorAll(".cardlist")) {
+        for (const c of this.parseComics(cardlist)) {
+          if (c.id && String(c.id) !== String(id)) recommend.push(c);
         }
       }
+
+      document.dispose();
       return new ComicDetails({
-        title: title,
-        cover: cover,
-        description: description,
-        tags: tags,
-        chapters: chapters,
-        recommend: recommend,
+        title,
+        cover,
+        description,
+        tags,
+        chapters,
+        recommend,
+        url: this._abs(id),
       });
     },
 
     loadEp: async (comicId, epId) => {
-      if (!epId || !epId.includes("@")) {
-        throw "无效的章节ID";
-      }
-      const ids = epId.split("@");
+      if (!epId || !String(epId).includes("@")) throw "无效的章节ID";
+      const ids = String(epId).split("@");
       const res = await Network.get(`${this.apiUrl}/chapter/getinfo?m=${ids[0]}&c=${ids[1]}`, this.headers);
-      if (res.status !== 200) {
-        throw `Invalid status code: ${res.status}`;
-      }
+      if (res.status !== 200) throw `Invalid status code: ${res.status}`;
       let jsonData;
-      try {
-        jsonData = JSON.parse(res.body);
-      } catch (e) {
-        throw "章节数据解析失败";
-      }
-
-      // 空值安全检查：防止 API 返回异常数据结构导致崩溃
-      if (!jsonData || !jsonData["data"] || !jsonData["data"]["info"]
-          || !jsonData["data"]["info"]["images"]) {
+      try { jsonData = JSON.parse(res.body); } catch (e) { throw "章节数据解析失败"; }
+      if (!jsonData || !jsonData.data || !jsonData.data.info
+        || !jsonData.data.info.images || jsonData.data.info.images.images == null) {
         throw "章节图片数据为空";
       }
-      const imagesRaw = jsonData["data"]["info"]["images"]["images"];
-
+      const imagesRaw = jsonData.data.info.images.images;
       let imagesList;
-      if (typeof imagesRaw === "string") {
-        // v2 API：混淆字符串 — 解码还原为 JSON 数组
-        imagesList = decodeChapterImages(imagesRaw);
-      } else if (Array.isArray(imagesRaw)) {
-        // v1 API（向后兼容）：{url: "...", order: N} 数组
-        imagesList = imagesRaw;
-      } else {
-        // 未知格式的图片数据
-        throw "未知的图片数据格式";
-      }
+      if (typeof imagesRaw === "string") imagesList = decodeChapterImages(imagesRaw);
+      else if (Array.isArray(imagesRaw)) imagesList = imagesRaw;
+      else throw "未知的图片数据格式";
 
       const images = [];
       for (let i of imagesList) {
         if (i && i["url"]) {
-          images.push(this.imageUrl + i["url"]);
+          images.push(/^https?:\/\//i.test(i["url"]) ? i["url"] : this.imageUrl + i["url"]);
         }
       }
+      if (!images.length) throw "章节图片为空";
       return { images };
     },
 
-    // 是否启用标签翻译
     enableTagsTranslate: false,
   }
 }
