@@ -126,13 +126,13 @@
         "name": "漫画柜",
         "fileName": "manhuagui.js",
         "key": "ManHuaGui",
-        "version": "1.2.4"
+        "version": "2.0.0"
     },
     {
         "name": "漫画人",
         "fileName": "manhuaren.js",
         "key": "manhuaren",
-        "version": "1.0.1"
+        "version": "2.0.0"
     },
     {
         "name": "漫蛙吧",
